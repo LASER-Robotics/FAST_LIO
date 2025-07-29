@@ -155,9 +155,16 @@ void fastPredictIMU(double t, V3D acc, V3D gyr)
     odomHigh.pose.pose.orientation.y = quadrotor_Q.y();
     odomHigh.pose.pose.orientation.z = quadrotor_Q.z();
     odomHigh.pose.pose.orientation.w = quadrotor_Q.w();
-    odomHigh.twist.twist.linear.x = latest_V.x();
-    odomHigh.twist.twist.linear.y = latest_V.y();
-    odomHigh.twist.twist.linear.z = latest_V.z();
+
+    // odomHigh.twist.twist.linear.x = latest_V.x();
+    // odomHigh.twist.twist.linear.y = latest_V.y();
+    // odomHigh.twist.twist.linear.z = latest_V.z();
+
+    V3D linear_velocity_body = latest_Q.transpose() * latest_V;
+    odomHigh.twist.twist.linear.x = linear_velocity_body.x();
+    odomHigh.twist.twist.linear.y = linear_velocity_body.y();
+    odomHigh.twist.twist.linear.z = linear_velocity_body.z();
+
     odomHigh.twist.twist.angular.x = gyr.x() - state_point.bg.x();
     odomHigh.twist.twist.angular.y = gyr.y() - state_point.bg.y();
     odomHigh.twist.twist.angular.z = gyr.z() - state_point.bg.z();
@@ -678,6 +685,16 @@ void publish_odometry(const rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPt
     odomAftMapped.child_frame_id = "body";
     odomAftMapped.header.stamp = get_ros_time(lidar_end_time);
     set_posestamp(odomAftMapped.pose);
+
+    // Adicionando as velocidades ao twist da odometria
+    V3D linear_velocity_body = state_point.rot.conjugate() * state_point.vel;
+    odomAftMapped.twist.twist.linear.x = linear_velocity_body.x();
+    odomAftMapped.twist.twist.linear.y = linear_velocity_body.y();
+    odomAftMapped.twist.twist.linear.z = linear_velocity_body.z();
+    odomAftMapped.twist.twist.angular.x = latest_gyr_0.x() - state_point.bg.x();
+    odomAftMapped.twist.twist.angular.y = latest_gyr_0.y() - state_point.bg.y();
+    odomAftMapped.twist.twist.angular.z = latest_gyr_0.z() - state_point.bg.z();
+
     pubOdomAftMapped->publish(odomAftMapped);
     auto P = kf.get_P();
     for (int i = 0; i < 6; i++)
