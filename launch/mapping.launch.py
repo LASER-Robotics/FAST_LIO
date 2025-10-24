@@ -67,6 +67,7 @@ def generate_launch_description():
         remappings=[
             ('lidar_in', 'livox/points'),
             ('imu_in', 'livox/imu'),
+            ('imu_out', 'fast_lio/imu/out'),
             ('cloud_registered_body_out', 'fast_lio/cloud_registered_body'),
             ('cloud_registered_out', 'fast_lio/cloud_registered'),
             ('cloud_effected_out', 'fast_lio/cloud_effected'),

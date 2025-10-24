@@ -2,9 +2,9 @@
     ros__parameters:
         feature_extract_enable: false
         point_filter_num: 3
-        max_iteration: 5
-        filter_size_surf: 0.2
-        filter_size_map: 0.2
+        max_iteration: 10
+        filter_size_surf: 0.4
+        filter_size_map: 0.4
         cube_side_length: 1000.0
         runtime_pos_log_enable: false
         map_file_path: "./test.pcd"
@@ -27,16 +27,17 @@
         mapping:
             acc_cov: 0.1
             gyr_cov: 0.1
-            b_acc_cov: 0.0001
-            b_gyr_cov: 0.0001
+            b_acc_cov: 0.01
+            b_gyr_cov: 0.01
             fov_degree: 360.0
-            det_range: 100.0
-            extrinsic_est_en: false # true: enable the online estimation of IMU-LiDAR extrinsic
+            det_range: 55.0
+            extrinsic_est_en: true # true: enable the online estimation of IMU-LiDAR extrinsic
             # extrinsic_T: [-0.011, -0.02329, 0.04412]
             extrinsic_T: [-0.0, -0.0, 0.0]
             extrinsic_R:
-                # [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0] # [r11, r12, r13, r21, r22, r23, r31, r32, r33]
-                [0.7071, 0.0, 0.7071, 0.0, 1.0, 0.0, -0.7071, 0.0, 0.7071]
+                [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0] # [r11, r12, r13, r21, r22, r23, r31, r32, r33]
+                # [1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, -1.0] # [r11, r12, r13, r21, r22, r23, r31, r32, r33]
+                # [0.7071, 0.0, 0.7071, 0.0, 1.0, 0.0, -0.7071, 0.0, 0.7071]
 
         publish:
             path_en: true # true: publish Path
