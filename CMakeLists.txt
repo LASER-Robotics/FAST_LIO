@@ -59,8 +59,10 @@ find_package(std_srvs REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(pcl_ros REQUIRED)
 find_package(pcl_conversions REQUIRED)
-find_package(livox_ros_driver2 REQUIRED)
+# find_package(livox_ros_driver2 REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
+find_package(tf2_eigen REQUIRED)
+find_package(tf2_sensor_msgs REQUIRED)
 
 set(dependencies
   rclcpp
@@ -73,7 +75,9 @@ set(dependencies
   visualization_msgs
   pcl_ros
   pcl_conversions
-  livox_ros_driver2
+  # livox_ros_driver2
+  tf2_eigen
+  tf2_sensor_msgs
 )
 
 # Thirdparty libraries

@@ -27,8 +27,10 @@
   <depend>tf2</depend>
   <depend>pcl_ros</depend>
   <depend>pcl_conversions</depend>
-  <depend>livox_ros_driver2</depend>
-
+  <!-- <depend>livox_ros_driver2</depend> -->
+  <depend>tf2_eigen</depend>
+  <depend>tf2_sensor_msgs</depend>
+  
   <exec_depend>rosidl_default_runtime</exec_depend>
   <member_of_group>rosidl_interface_packages</member_of_group>
 

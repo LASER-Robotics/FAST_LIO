@@ -2,13 +2,13 @@
 #include <rclcpp/rclcpp.hpp>
 #include <pcl_conversions/pcl_conversions.h>
 #include <sensor_msgs/msg/point_cloud2.hpp>
-#include <livox_ros_driver2/msg/custom_msg.hpp>
+// #include <livox_ros_driver2/msg/custom_msg.hpp>
 
 using namespace std;
 
 #define IS_VALID(a) ((abs(a) > 1e8) ? true : false)
 
-typedef pcl::PointXYZINormal PointType;
+typedef pcl::PointXYZINormal       PointType;
 typedef pcl::PointCloud<PointType> PointCloudXYZI;
 
 enum LID_TYPE
@@ -21,9 +21,9 @@ enum LID_TYPE
 enum TIME_UNIT
 {
   SEC = 0,
-  MS = 1,
-  US = 2,
-  NS = 3
+  MS  = 1,
+  US  = 2,
+  NS  = 3
 };
 enum Feature
 {
@@ -51,18 +51,17 @@ enum E_jump
 
 struct orgtype
 {
-  double range;
-  double dista;
-  double angle[2];
-  double intersect;
-  E_jump edj[2];
+  double  range;
+  double  dista;
+  double  angle[2];
+  double  intersect;
+  E_jump  edj[2];
   Feature ftype;
-  orgtype()
-  {
-    range = 0;
+  orgtype() {
+    range     = 0;
     edj[Prev] = Nr_nor;
     edj[Next] = Nr_nor;
-    ftype = Nor;
+    ftype     = Nor;
     intersect = 2;
   }
 };
@@ -72,26 +71,24 @@ namespace velodyne_ros
 struct EIGEN_ALIGN16 Point
 {
   PCL_ADD_POINT4D;
-  float intensity;
-  float time;
+  float    intensity;
+  float    time;
   uint16_t ring;
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 };
 }  // namespace velodyne_ros
 POINT_CLOUD_REGISTER_POINT_STRUCT(velodyne_ros::Point,
-                                  (float, x, x)(float, y, y)(float, z, z)(float, intensity,
-                                                                          intensity)(float, time, time)(uint16_t, ring,
-                                                                                                        ring))
+                                  (float, x, x)(float, y, y)(float, z, z)(float, intensity, intensity)(float, time, time)(uint16_t, ring, ring))
 
 namespace ouster_ros
 {
 struct EIGEN_ALIGN16 Point
 {
   PCL_ADD_POINT4D;
-  float intensity;
+  float    intensity;
   uint32_t t;
   uint16_t reflectivity;
-  uint8_t ring;
+  uint8_t  ring;
   uint16_t ambient;
   uint32_t range;
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
@@ -158,7 +155,7 @@ class Preprocess
   Preprocess();
   ~Preprocess();
   
-  void process(const livox_ros_driver2::msg::CustomMsg::UniquePtr &msg, PointCloudXYZI::Ptr &pcl_out);
+  // void process(const livox_ros_driver2::msg::CustomMsg::UniquePtr &msg, PointCloudXYZI::Ptr &pcl_out);
   void process(const sensor_msgs::msg::PointCloud2::UniquePtr &msg, PointCloudXYZI::Ptr &pcl_out);
   void set(bool feat_en, int lid_type, double bld, int pfilt_num);
 
@@ -173,7 +170,7 @@ class Preprocess
   // ros::Publisher pub_full, pub_surf, pub_corn;
 
 private:
-  void avia_handler(const livox_ros_driver2::msg::CustomMsg::UniquePtr &msg);
+  // void avia_handler(const livox_ros_driver2::msg::CustomMsg::UniquePtr &msg);
   void oust64_handler(const sensor_msgs::msg::PointCloud2::UniquePtr &msg);
   void velodyne_handler(const sensor_msgs::msg::PointCloud2::UniquePtr &msg);
   void mid360_handler(const sensor_msgs::msg::PointCloud2::UniquePtr &msg);
