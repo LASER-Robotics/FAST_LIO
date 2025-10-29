@@ -37,8 +37,7 @@ def generate_launch_description():
         description='Yaml config file path'
     )
 
-    declared_topic_imu = 
-        DeclareLaunchArgument(
+    declared_topic_imu = DeclareLaunchArgument(
             'topic_imu',
             default_value=['/', os.getenv('UAV_NAME', "uav1"), '/livox/imu'],
             description='Name of the IMU topic.'
