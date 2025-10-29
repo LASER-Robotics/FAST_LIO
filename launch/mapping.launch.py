@@ -23,7 +23,7 @@ def generate_launch_description():
     namespace = LaunchConfiguration('namespace')
 
     use_sim_time = LaunchConfiguration('use_sim_time')
-    config_file_path = LaunchConfiguration('config_path')
+    config_file_path = LaunchConfiguration('config_file_path')
 
     declare_use_sim_time = DeclareLaunchArgument(
         'use_sim_time', default_value='false',
