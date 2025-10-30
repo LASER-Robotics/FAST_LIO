@@ -1008,17 +1008,10 @@ public:
     this->declare_parameter<vector<double>>("mapping.extrinsic_R", vector<double>());
     this->declare_parameter<string>("uav_name", "uav1");
     this->declare_parameter<bool>("imu_in_gravity_unit", false);
-    this->declare_parameter<bool>("transform.enabled", false);
     this->declare_parameter<string>("transform.fcu_frame", "uav1/fl_fcu");
     this->declare_parameter<string>("transform.world_frame", "world");
     this->declare_parameter<string>("transform.lidar_frame", "lidar");
     this->declare_parameter<string>("transform.imu_frame", "imu");
-    this->declare_parameter<double>("transform.static_transform.translation.x", 0.0);
-    this->declare_parameter<double>("transform.static_transform.translation.y", 0.0);
-    this->declare_parameter<double>("transform.static_transform.translation.z", 0.0);
-    this->declare_parameter<double>("transform.static_transform.rotation.roll", 0.0);
-    this->declare_parameter<double>("transform.static_transform.rotation.pitch", 0.0);
-    this->declare_parameter<double>("transform.static_transform.rotation.yaw", 0.0);
 
     tf_broadcaster_        = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
     static_tf_broadcaster_ = std::make_unique<tf2_ros::StaticTransformBroadcaster>(*this);
@@ -1062,33 +1055,11 @@ public:
     this->get_parameter_or<string>("uav_name", _uav_name_, "uav1");
     this->get_parameter_or<bool>("imu_in_gravity_unit", _imu_in_gravity_unit_, false);
 
-    this->get_parameter_or<bool>("transform.enabled", _transform_enabled_, false);
     this->get_parameter_or<string>("transform.fcu_frame", _fcu_frame_, "fcu");
     this->get_parameter_or<string>("transform.world_frame", _world_frame_, "world");
     this->get_parameter_or<string>("transform.lidar_frame", _lidar_frame_, "lidar");
     this->get_parameter_or<string>("transform.imu_frame", _imu_frame_, "imu");
 
-    double _translation_x_, _translation_y_, _translation_z_;
-    this->get_parameter_or<double>("transform.static_transform.translation.x", _translation_x_, 0.0);
-    this->get_parameter_or<double>("transform.static_transform.translation.y", _translation_y_, 0.0);
-    this->get_parameter_or<double>("transform.static_transform.translation.z", _translation_z_, 0.0);
-
-    double _rotation_roll_, _rotation_pitch_, _rotation_yaw_;
-    this->get_parameter_or<double>("transform.static_transform.rotation.roll", _rotation_roll_, 0.0);
-    this->get_parameter_or<double>("transform.static_transform.rotation.pitch", _rotation_pitch_, 0.0);
-    this->get_parameter_or<double>("transform.static_transform.rotation.yaw", _rotation_yaw_, 0.0);
-
-    _translation_ = Eigen::Vector3d(_translation_x_, _translation_y_, _translation_z_);
-    _rotation_    = Eigen::Vector3d(_rotation_roll_, _rotation_pitch_, _rotation_yaw_);
-
-    if (_transform_enabled_) {
-      RCLCPP_INFO(this->get_logger(), "Transform is enabled.");
-      publishStaticTransform(_fcu_frame_, _lidar_frame_, _translation_, _rotation_);
-      publishStaticTransform(_fcu_frame_, _imu_frame_, _translation_, _rotation_);
-      publishStaticTransform(_fcu_frame_, _uav_name_ + "/fast_local", Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero());
-    } else {
-      RCLCPP_INFO(this->get_logger(), "Transform is disabled.");
-    }
 
     RCLCPP_INFO(this->get_logger(), "p_pre->lidar_type %d", p_pre->lidar_type);
 
