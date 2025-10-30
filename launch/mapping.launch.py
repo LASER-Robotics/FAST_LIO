@@ -4,7 +4,7 @@ from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, EnvironmentVariable
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, EnvironmentVariable, PythonExpression
 from launch.conditions import IfCondition
 
 from launch_ros.actions import Node
@@ -28,7 +28,7 @@ def generate_launch_description():
     topic_imu = LaunchConfiguration('topic_imu')
 
     declared_use_sim_time = DeclareLaunchArgument(
-        'use_sim_time', default_value='false',
+        'use_sim_time', default_value=PythonExpression(['"', os.getenv('REAL_UAV', "true"), '" == "false"']),
         description='Use simulation (Gazebo) clock if true'
     )
 
