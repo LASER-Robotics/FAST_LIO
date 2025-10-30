@@ -54,26 +54,7 @@
         imu_in_gravity_unit: false # true: the IMU linear acceleration is in gravity unit (g), false: in m/s^2
         
         transform:
-            enabled: true
             fcu_frame: "uav1/fcu"
             world_frame: "uav1/world"
-            lidar_frame: "uav1/lidar"
-            imu_frame: "uav1/imu"
-            static_transform:
-                translation:
-                    x: 0.0
-                    y: 0.0
-                    z: 0.0
-                rotation:
-                    roll: 3.14
-                    pitch: 0.0
-                    yaw: 0.0
-                # rotation:
-                #     roll: 0.0
-                #     pitch: 0.78539825
-                #     yaw: 0.0
-                # rotation:
-                #     roll: 0.0
-                #     pitch: 0.0
-                #     yaw: 0.0
-
+            lidar_frame: "uav1/livox_lidar"
+            imu_frame: "uav1/livox_imu"
