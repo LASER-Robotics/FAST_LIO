@@ -792,7 +792,6 @@ void publish_odometry(const rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPt
   odomAftMapped.twist.twist.angular.y = latest_gyr_0.y() - state_point.bg.y();
   odomAftMapped.twist.twist.angular.z = latest_gyr_0.z() - state_point.bg.z();
 
-  pubOdomAftMapped->publish(odomAftMapped);
   auto P = kf.get_P();
   for (int i = 0; i < 6; i++) {
     int k                                    = i < 3 ? i + 3 : i - 3;
@@ -803,6 +802,8 @@ void publish_odometry(const rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPt
     odomAftMapped.pose.covariance[i * 6 + 4] = P(k, 1);
     odomAftMapped.pose.covariance[i * 6 + 5] = P(k, 2);
   }
+
+  pubOdomAftMapped->publish(odomAftMapped);
 
   geometry_msgs::msg::TransformStamped trans;
 
@@ -816,16 +817,26 @@ void publish_odometry(const rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPt
   trans.transform.translation.y = odomAftMapped.pose.pose.position.y;
   trans.transform.translation.z = odomAftMapped.pose.pose.position.z;
 
-  Eigen::Quaterniond q, q_odom;
+  geometry_msgs::msg::TransformStamped T_dinamica;
 
-  q = Eigen::AngleAxisd(_rotation_.z(), Eigen::Vector3d::UnitZ()) * Eigen::AngleAxisd(_rotation_.y(), Eigen::Vector3d::UnitY()) *
-      Eigen::AngleAxisd(_rotation_.x(), Eigen::Vector3d::UnitX());
+  try {
+    T_dinamica = tf_buffer_->lookupTransform(_fcu_frame_, _lidar_frame_, odomAftMapped.header.stamp, rclcpp::Duration::from_seconds(0.1));
+  }
+  catch (const tf2::TransformException &ex) {
+    RCLCPP_WARN(rclcpp::get_logger("fast_lio"), "Não foi possível obter a TF de '%s' para '%s': %s", _lidar_frame_.c_str(), _fcu_frame_.c_str(), ex.what());
+    return;
+  }
+
+  Eigen::Quaterniond q_dinamica;
+  q_dinamica =
+      Eigen::Quaterniond(T_dinamica.transform.rotation.w, T_dinamica.transform.rotation.x, T_dinamica.transform.rotation.y, T_dinamica.transform.rotation.z);
 
 
+  Eigen::Quaterniond q_odom;
   q_odom = Eigen::Quaterniond(odomAftMapped.pose.pose.orientation.w, odomAftMapped.pose.pose.orientation.x, odomAftMapped.pose.pose.orientation.y,
                               odomAftMapped.pose.pose.orientation.z);
 
-  Eigen::Quaterniond q_final = q_odom * q;
+  Eigen::Quaterniond q_final = q_odom * q_dinamica;
 
   trans.transform.rotation.w = q_final.w();
   trans.transform.rotation.x = q_final.x();
