@@ -45,7 +45,7 @@ def generate_launch_description():
 
     declared_topic_pcl = DeclareLaunchArgument(
             'topic_pcl',
-            default_value=['/', os.getenv('UAV_NAME', "uav1"), '/livox/lidar'],
+            default_value=['/', os.getenv('UAV_NAME', "uav1"), '/livox/fused_lidar'],
             description='Name of the pcl topic.'
     )
 

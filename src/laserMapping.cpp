@@ -89,8 +89,10 @@ int    iterCount = 0, feats_down_size = 0, NUM_MAX_ITERATIONS = 0, laserCloudVal
 bool   point_selected_surf[100000] = {0};
 bool   lidar_pushed, flg_first_scan = true, flg_exit = false, flg_EKF_inited;
 bool   scan_pub_en = false, dense_pub_en = false, scan_body_pub_en = false;
-bool   is_first_lidar        = true;
-bool   _imu_in_gravity_unit_ = false;
+bool   is_first_lidar                = true;
+bool   _imu_in_gravity_unit_         = false;
+bool   _imu_transform_fcu_enabled_   = false;
+bool   _lidar_transform_fcu_enabled_ = false;
 
 vector<vector<int>>                          pointSearchInd_surf;
 vector<BoxPointType>                         cub_needrm;
@@ -172,7 +174,8 @@ void fastPredictIMU(double t, V3D acc, V3D gyr) {
   Eigen::Quaterniond      quadrotor_Q = Eigen::Quaterniond(latest_Q);
 
   rclcpp::Clock clock;
-  odomHigh.header.stamp = clock.now();
+  odomHigh.header.stamp      = get_ros_time(t);
+  odomAftMapped.header.stamp = get_ros_time(t);
 
   odomHigh.header.frame_id = _world_frame_;
   odomHigh.child_frame_id  = _imu_frame_;
@@ -334,10 +337,12 @@ void         lasermap_fov_segment() {
 
 void standard_pcl_cbk(const sensor_msgs::msg::PointCloud2::UniquePtr msg) {
   mtx_buffer.lock();
+
   last_pointcloud_msg = *msg;
   scan_count++;
   double cur_time              = get_time_sec(msg->header.stamp);
   double preprocess_start_time = omp_get_wtime();
+
   if (!is_first_lidar && cur_time < last_timestamp_lidar) {
     std::cerr << "lidar loop back, clear buffer" << std::endl;
     lidar_buffer.clear();
@@ -346,28 +351,36 @@ void standard_pcl_cbk(const sensor_msgs::msg::PointCloud2::UniquePtr msg) {
     is_first_lidar = false;
   }
 
-  geometry_msgs::msg::TransformStamped T_FCU_IMU;
-  try {
-    T_FCU_IMU = tf_buffer_->lookupTransform(_fcu_frame_, _lidar_frame_, msg->header.stamp, rclcpp::Duration::from_seconds(0.1));
-  }
-  catch (const tf2::TransformException &ex) {
-    RCLCPP_WARN(rclcpp::get_logger("fast_lio"), "Nao foi possivel obter a transformacao de '%s' para '%s': %s", _lidar_frame_.c_str(), _fcu_frame_.c_str(),
-                ex.what());
-    mtx_buffer.unlock();  // Não esquecer de libertar o lock antes de sair
-    return;
-  }
-
-  auto transformed_ros_msg = std::make_unique<sensor_msgs::msg::PointCloud2>();
-  tf2::doTransform(*msg, *transformed_ros_msg, T_FCU_IMU);
-  transformed_ros_msg->header.stamp    = msg->header.stamp;
-  transformed_ros_msg->header.frame_id = _fcu_frame_;
-
   PointCloudXYZI::Ptr ptr(new PointCloudXYZI());
-  p_pre->process(transformed_ros_msg, ptr);
+
+  if (_lidar_transform_fcu_enabled_) {
+    geometry_msgs::msg::TransformStamped T_FCU_IMU;
+    try {
+      T_FCU_IMU = tf_buffer_->lookupTransform(_fcu_frame_, _lidar_frame_, msg->header.stamp, rclcpp::Duration::from_seconds(0.1));
+    }
+    catch (const tf2::TransformException &ex) {
+      RCLCPP_WARN(rclcpp::get_logger("fast_lio"), "Nao foi possivel obter a transformacao de '%s' para '%s': %s", _lidar_frame_.c_str(), _fcu_frame_.c_str(),
+                  ex.what());
+      mtx_buffer.unlock();
+      return;
+    }
+
+    auto transformed_ros_msg = std::make_unique<sensor_msgs::msg::PointCloud2>();
+    tf2::doTransform(*msg, *transformed_ros_msg, T_FCU_IMU);
+    transformed_ros_msg->header.stamp    = msg->header.stamp;
+    transformed_ros_msg->header.frame_id = _fcu_frame_;
+
+    p_pre->process(transformed_ros_msg, ptr);
+
+  } else {
+    p_pre->process(msg, ptr);
+  }
+
   lidar_buffer.push_back(ptr);
   time_buffer.push_back(cur_time);
   last_timestamp_lidar = cur_time;
   s_plot11[scan_count] = omp_get_wtime() - preprocess_start_time;
+
   mtx_buffer.unlock();
   sig_buffer.notify_all();
 }
@@ -445,43 +458,55 @@ void imu_cbk(const sensor_msgs::msg::Imu::UniquePtr msg_in) {
   acc_0 = V3D(msg->linear_acceleration.x, msg->linear_acceleration.y, msg->linear_acceleration.z);
   gyr_0 = V3D(msg->angular_velocity.x, msg->angular_velocity.y, msg->angular_velocity.z);
 
-  geometry_msgs::msg::TransformStamped T_FCU_IMU;
-  try {
-    T_FCU_IMU = tf_buffer_->lookupTransform(_fcu_frame_, _imu_frame_, msg->header.stamp, rclcpp::Duration::from_seconds(0.1));
+
+  V3D imu_accel_v3d = V3D::Zero();
+  V3D imu_gyro_v3d  = V3D::Zero();
+
+  if (_imu_transform_fcu_enabled_) {
+    geometry_msgs::msg::TransformStamped T_FCU_IMU;
+    try {
+      T_FCU_IMU = tf_buffer_->lookupTransform(_fcu_frame_, _imu_frame_, msg->header.stamp, rclcpp::Duration::from_seconds(0.1));
+    }
+    catch (const tf2::TransformException &ex) {
+      RCLCPP_WARN(rclcpp::get_logger("fast_lio"), "Nao foi possivel obter a transformacao de '%s' para '%s': %s", _imu_frame_.c_str(), _fcu_frame_.c_str(),
+                  ex.what());
+      return;
+    }
+
+    Eigen::Quaterniond q_FCU_IMU(T_FCU_IMU.transform.rotation.w, T_FCU_IMU.transform.rotation.x, T_FCU_IMU.transform.rotation.y,
+                                 T_FCU_IMU.transform.rotation.z);
+    Eigen::Vector3d    p_FCU_IMU(T_FCU_IMU.transform.translation.x, T_FCU_IMU.transform.translation.y, T_FCU_IMU.transform.translation.z);
+
+
+    Eigen::Vector3d    fcu_gyro        = q_FCU_IMU * imu_gyro;
+    Eigen::Vector3d    fcu_accel       = q_FCU_IMU * imu_accel;
+    Eigen::Quaterniond fcu_orientation = imu_orientation * q_FCU_IMU.inverse();
+
+    imu_gyro_v3d  = V3D(fcu_gyro.x(), fcu_gyro.y(), fcu_gyro.z());
+    imu_accel_v3d = V3D(fcu_accel.x(), fcu_accel.y(), fcu_accel.z());
+
+    Eigen::Quaterniond quaternion_imu(fcu_orientation.w(), fcu_orientation.x(), fcu_orientation.y(), fcu_orientation.z());
+
+    msg->linear_acceleration.x = fcu_accel(0);
+    msg->linear_acceleration.y = fcu_accel(1);
+    msg->linear_acceleration.z = fcu_accel(2);
+    msg->angular_velocity.x    = fcu_gyro(0);
+    msg->angular_velocity.y    = fcu_gyro(1);
+    msg->angular_velocity.z    = fcu_gyro(2);
+    msg->orientation.w         = fcu_orientation.w();
+    msg->orientation.x         = fcu_orientation.x();
+    msg->orientation.y         = fcu_orientation.y();
+    msg->orientation.z         = fcu_orientation.z();
+  } else {
+    imu_gyro_v3d  = V3D(imu_gyro.x(), imu_gyro.y(), imu_gyro.z());
+    imu_accel_v3d = V3D(imu_accel.x(), imu_accel.y(), imu_accel.z());
   }
-  catch (const tf2::TransformException &ex) {
-    RCLCPP_WARN(rclcpp::get_logger("fast_lio"), "Nao foi possivel obter a transformacao de '%s' para '%s': %s", _imu_frame_.c_str(), _fcu_frame_.c_str(),
-                ex.what());
-    return;
-  }
-
-  Eigen::Quaterniond q_FCU_IMU(T_FCU_IMU.transform.rotation.w, T_FCU_IMU.transform.rotation.x, T_FCU_IMU.transform.rotation.y, T_FCU_IMU.transform.rotation.z);
-  Eigen::Vector3d    p_FCU_IMU(T_FCU_IMU.transform.translation.x, T_FCU_IMU.transform.translation.y, T_FCU_IMU.transform.translation.z);
-
-
-  Eigen::Vector3d    fcu_gyro        = q_FCU_IMU * imu_gyro;
-  Eigen::Vector3d    fcu_accel       = q_FCU_IMU * imu_accel;
-  Eigen::Quaterniond fcu_orientation = imu_orientation * q_FCU_IMU.inverse();
-
-  V3D                imu_gyro_v3d(fcu_gyro.x(), fcu_gyro.y(), fcu_gyro.z());
-  V3D                imu_accel_v3d(fcu_accel.x(), fcu_accel.y(), fcu_accel.z());
-  Eigen::Quaterniond quaternion_imu(fcu_orientation.w(), fcu_orientation.x(), fcu_orientation.y(), fcu_orientation.z());
-
-  msg->linear_acceleration.x = fcu_accel(0);
-  msg->linear_acceleration.y = fcu_accel(1);
-  msg->linear_acceleration.z = fcu_accel(2);
-  msg->angular_velocity.x    = fcu_gyro(0);
-  msg->angular_velocity.y    = fcu_gyro(1);
-  msg->angular_velocity.z    = fcu_gyro(2);
-  msg->orientation.w         = fcu_orientation.w();
-  msg->orientation.x         = fcu_orientation.x();
-  msg->orientation.y         = fcu_orientation.y();
-  msg->orientation.z         = fcu_orientation.z();
 
   if (_imu_in_gravity_unit_) {
     msg->linear_acceleration.x *= G_m_s2;
     msg->linear_acceleration.y *= G_m_s2;
     msg->linear_acceleration.z *= G_m_s2;
+    imu_accel_v3d *= G_m_s2;
   }
 
   pubImu_->publish(*msg);
@@ -1019,6 +1044,8 @@ public:
     this->declare_parameter<vector<double>>("mapping.extrinsic_R", vector<double>());
     this->declare_parameter<string>("uav_name", "uav1");
     this->declare_parameter<bool>("imu_in_gravity_unit", false);
+    this->declare_parameter<bool>("imu_transform_fcu_enabled", false);
+    this->declare_parameter<bool>("lidar_transform_fcu_enabled", false);
     this->declare_parameter<string>("transform.fcu_frame", "uav1/fl_fcu");
     this->declare_parameter<string>("transform.world_frame", "world");
     this->declare_parameter<string>("transform.lidar_frame", "lidar");
@@ -1065,6 +1092,8 @@ public:
 
     this->get_parameter_or<string>("uav_name", _uav_name_, "uav1");
     this->get_parameter_or<bool>("imu_in_gravity_unit", _imu_in_gravity_unit_, false);
+    this->get_parameter_or<bool>("imu_transform_fcu_enabled", _imu_transform_fcu_enabled_, false);
+    this->get_parameter_or<bool>("lidar_transform_fcu_enabled", _lidar_transform_fcu_enabled_, false);
 
     this->get_parameter_or<string>("transform.fcu_frame", _fcu_frame_, "fcu");
     this->get_parameter_or<string>("transform.world_frame", _world_frame_, "world");

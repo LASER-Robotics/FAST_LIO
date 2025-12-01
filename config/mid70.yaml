@@ -12,7 +12,7 @@
 
         common:
             lid_topic: "/uav5/livox/points"
-            imu_topic: "/uav5/livox/imu"
+            imu_topic: "/uav5/px4_api/imu"
             time_sync_en: false # ONLY turn on when external time synchronization is really not possible
             time_offset_lidar_to_imu:
                 0.0 # Time offset between lidar and IMU calibrated by other algorithms, e.g. LI-Init (can be found in README).
@@ -33,10 +33,9 @@
             fov_degree: 360.0
             det_range: 100.0
             extrinsic_est_en: false # true: enable the online estimation of IMU-LiDAR extrinsic
-            extrinsic_T: [-0.0, -0.0, 0.0]
+            extrinsic_T: [-0.1, -0.0, 0.0]
             extrinsic_R:
-                [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0] # [r11, r12, r13, r21, r22, r23, r31, r32, r33]
-
+                [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0] 
         publish:
             path_en: true # true: publish Path
             effect_map_en: true # true: publish Effects
@@ -52,11 +51,11 @@
                 # -1 : all frames will be saved in ONE pcd file, may lead to memory crash when having too much frames.
         
         imu_in_gravity_unit: false # true: the IMU linear acceleration is in gravity unit (g), false: in m/s^2
-        imu_transform_fcu_enabled: true # true: transform IMU data to FCU frame
+        imu_transform_fcu_enabled: false # true: transform IMU data to FCU frame
         lidar_transform_fcu_enabled: true # true: transform LiDAR data to FCU frame
         
         transform:
-            fcu_frame: "uav5/fcu"
-            world_frame: "uav5/world"
-            lidar_frame: "uav5/livox_lidar"
-            imu_frame: "uav5/livox_imu"
+            fcu_frame: "uav1/fcu"
+            world_frame: "uav1/world"
+            lidar_frame: "uav1/livox_lidar"
+            imu_frame: "uav1/livox_imu"
