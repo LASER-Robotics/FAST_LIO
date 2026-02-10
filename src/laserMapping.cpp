@@ -159,13 +159,14 @@ void updateLatestStates() {
 void fastPredictIMU(double t, V3D acc, V3D gyr) {
   double dt    = t - latest_time;
   latest_time  = t;
-  V3D un_acc_0 = latest_Q * (latest_acc_0 - latest_Ba) + V3D(state_point.grav[0], state_point.grav[1], state_point.grav[2]);
-  V3D un_gyr   = 0.5 * (latest_gyr_0 + gyr) - latest_Bg;
+  V3D un_acc_0 = latest_Q * (latest_acc_0 - latest_Ba) + V3D(0.0,0.0,-9.8);
+  V3D un_gyr   = 0.5 * (latest_gyr_0 + gyr - (2 * latest_Bg));
   latest_Q     = latest_Q * Exp(un_gyr, dt);
-  V3D un_acc_1 = latest_Q * (acc - latest_Ba) + V3D(state_point.grav[0], state_point.grav[1], state_point.grav[2]);
+  V3D un_acc_1 = latest_Q * (acc - latest_Ba) + V3D(0.0,0.0,-9.8);
   V3D un_acc   = 0.5 * (un_acc_0 + un_acc_1);
-  latest_P     = latest_P + dt * latest_V + 0.5 * dt * dt * un_acc;
-  latest_V     = latest_V + dt * un_acc;
+  V3D un_vell  = 0.5 * (latest_V + (latest_V + (dt * un_acc)));
+  latest_P     = latest_P + (dt * un_vell) + (0.5 * dt * dt * un_acc);
+  latest_V     = latest_V + (dt * un_acc);
   latest_acc_0 = acc;
   latest_gyr_0 = gyr;
   nav_msgs::msg::Odometry odomHigh;
