@@ -159,10 +159,12 @@ void updateLatestStates() {
 void fastPredictIMU(double t, V3D acc, V3D gyr) {
   double dt    = t - latest_time;
   latest_time  = t;
-  V3D un_acc_0 = latest_Q * (latest_acc_0 - latest_Ba) + V3D(0.0,0.0,-9.8);
-  V3D un_gyr   = 0.5 * (latest_gyr_0 + gyr - (2 * latest_Bg));
+  /* V3D un_acc_0 = latest_Q * (latest_acc_0 - latest_Ba) + V3D(0.0, 0.0, -9.8); */
+  V3D un_acc_0 = latest_Q * (latest_acc_0 - latest_Ba) + V3D(state_point.grav[0],state_point.grav[1],state_point.grav[2]);
+  V3D un_gyr   = 0.5 * (latest_gyr_0 + gyr - (latest_Bg));
   latest_Q     = latest_Q * Exp(un_gyr, dt);
-  V3D un_acc_1 = latest_Q * (acc - latest_Ba) + V3D(0.0,0.0,-9.8);
+  /* V3D un_acc_1 = latest_Q * (acc - latest_Ba) + V3D(0, 0, -9.8); */
+  V3D un_acc_1 = latest_Q * (acc - latest_Ba) + V3D(state_point.grav[0],state_point.grav[1],state_point.grav[2]);
   V3D un_acc   = 0.5 * (un_acc_0 + un_acc_1);
   V3D un_vell  = 0.5 * (latest_V + (latest_V + (dt * un_acc)));
   latest_P     = latest_P + (dt * un_vell) + (0.5 * dt * dt * un_acc);
@@ -171,7 +173,10 @@ void fastPredictIMU(double t, V3D acc, V3D gyr) {
   latest_gyr_0 = gyr;
   nav_msgs::msg::Odometry odomHigh;
   Eigen::Quaterniond      quadrotor_Q = Eigen::Quaterniond(latest_Q);
-
+  
+  std::cout << "acc: " << un_acc << std::endl;
+  std::cout << "gyro: " << un_gyr << std::endl;
+  
   rclcpp::Clock clock;
   odomHigh.header.stamp = clock.now();
 
@@ -435,9 +440,14 @@ Eigen::Quaterniond quaternion_imu_initial;
 
 void imu_cbk(const sensor_msgs::msg::Imu::UniquePtr msg_in) {
   publish_count++;
+
   sensor_msgs::msg::Imu::SharedPtr msg(new sensor_msgs::msg::Imu(*msg_in));
 
-  last_imu_msg = *msg;
+  if (_imu_in_gravity_unit_) {
+    msg->linear_acceleration.x *= G_m_s2;
+    msg->linear_acceleration.y *= G_m_s2;
+    msg->linear_acceleration.z *= G_m_s2;
+  }
 
   Eigen::Vector3d    imu_accel(msg->linear_acceleration.x, msg->linear_acceleration.y, msg->linear_acceleration.z);
   Eigen::Vector3d    imu_gyro(msg->angular_velocity.x, msg->angular_velocity.y, msg->angular_velocity.z);
@@ -479,12 +489,6 @@ void imu_cbk(const sensor_msgs::msg::Imu::UniquePtr msg_in) {
   msg->orientation.y         = fcu_orientation.y();
   msg->orientation.z         = fcu_orientation.z();
 
-  if (_imu_in_gravity_unit_) {
-    msg->linear_acceleration.x *= G_m_s2;
-    msg->linear_acceleration.y *= G_m_s2;
-    msg->linear_acceleration.z *= G_m_s2;
-  }
-
   pubImu_->publish(*msg);
 
   if (init) {
@@ -506,7 +510,8 @@ void imu_cbk(const sensor_msgs::msg::Imu::UniquePtr msg_in) {
   }
 
   last_timestamp_imu = timestamp;
-
+  last_imu_msg = *msg;
+  
   imu_buffer.push_back(msg);
   mtx_buffer.unlock();
   sig_buffer.notify_all();
