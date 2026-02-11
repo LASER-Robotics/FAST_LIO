@@ -141,42 +141,46 @@ rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr   pubImu_;
 
 
 double latest_time;
-V3D    latest_P, latest_V, latest_Ba, latest_Bg, latest_acc_0, latest_gyr_0, acc_0, gyr_0;
+V3D    latest_Ba, latest_Bg, latest_acc_0, latest_gyr_0;
+V3D    latest_P = V3D(0.0, 0.0, 0.0);
+V3D    latest_V = V3D(0.0, 0.0, 0.0);
 M3D    latest_Q;
-bool   init = false;
+bool   init               = false;
+bool   first_ikdtree_out_ = false;
 
 void updateLatestStates() {
-  latest_time  = lidar_end_time;
-  latest_P     = state_point.pos;
-  latest_Q     = state_point.rot;
-  latest_V     = state_point.vel;
-  latest_Ba    = state_point.ba;
-  latest_Bg    = state_point.bg;
-  latest_acc_0 = acc_0;
-  latest_gyr_0 = gyr_0;
+  latest_time = lidar_end_time;
+  latest_P    = 0.5 * (state_point.pos + latest_P);
+  latest_V    = 0.5 * (state_point.vel + latest_V);
+  latest_Q    = state_point.rot;
+  latest_Ba   = state_point.ba;
+  latest_Bg   = state_point.bg;
+
+  if (!first_ikdtree_out_) {
+    first_ikdtree_out_ = true;
+  }
 }
 
 void fastPredictIMU(double t, V3D acc, V3D gyr) {
+  if (!first_ikdtree_out_) {
+    return;
+  }
+
   double dt    = t - latest_time;
   latest_time  = t;
-  /* V3D un_acc_0 = latest_Q * (latest_acc_0 - latest_Ba) + V3D(0.0, 0.0, -9.8); */
-  V3D un_acc_0 = latest_Q * (latest_acc_0 - latest_Ba) + V3D(state_point.grav[0],state_point.grav[1],state_point.grav[2]);
-  V3D un_gyr   = 0.5 * (latest_gyr_0 + gyr - (latest_Bg));
+  V3D un_acc_0 = latest_Q * (latest_acc_0 - latest_Ba);
+  V3D un_gyr   = 0.5 * (latest_gyr_0 + gyr - (2 * latest_Bg));
   latest_Q     = latest_Q * Exp(un_gyr, dt);
-  /* V3D un_acc_1 = latest_Q * (acc - latest_Ba) + V3D(0, 0, -9.8); */
-  V3D un_acc_1 = latest_Q * (acc - latest_Ba) + V3D(state_point.grav[0],state_point.grav[1],state_point.grav[2]);
+  V3D un_acc_1 = latest_Q * (acc - latest_Ba);
   V3D un_acc   = 0.5 * (un_acc_0 + un_acc_1);
-  V3D un_vell  = 0.5 * (latest_V + (latest_V + (dt * un_acc)));
-  latest_P     = latest_P + (dt * un_vell) + (0.5 * dt * dt * un_acc);
-  latest_V     = latest_V + (dt * un_acc);
+  V3D un_vell  = 0.5 * (latest_V + (latest_V + (dt * (un_acc + V3D(state_point.grav)))));
+  latest_P     = latest_P + (dt * un_vell) + (0.5 * dt * dt * (un_acc + V3D(state_point.grav)));
+  latest_V     = un_vell;
   latest_acc_0 = acc;
   latest_gyr_0 = gyr;
   nav_msgs::msg::Odometry odomHigh;
   Eigen::Quaterniond      quadrotor_Q = Eigen::Quaterniond(latest_Q);
-  
-  std::cout << "acc: " << un_acc << std::endl;
-  std::cout << "gyro: " << un_gyr << std::endl;
-  
+
   rclcpp::Clock clock;
   odomHigh.header.stamp = clock.now();
 
@@ -453,9 +457,6 @@ void imu_cbk(const sensor_msgs::msg::Imu::UniquePtr msg_in) {
   Eigen::Vector3d    imu_gyro(msg->angular_velocity.x, msg->angular_velocity.y, msg->angular_velocity.z);
   Eigen::Quaterniond imu_orientation(msg->orientation.w, msg->orientation.x, msg->orientation.y, msg->orientation.z);
 
-  acc_0 = V3D(msg->linear_acceleration.x, msg->linear_acceleration.y, msg->linear_acceleration.z);
-  gyr_0 = V3D(msg->angular_velocity.x, msg->angular_velocity.y, msg->angular_velocity.z);
-
   geometry_msgs::msg::TransformStamped T_FCU_IMU;
   try {
     T_FCU_IMU = tf_buffer_->lookupTransform(_fcu_frame_, _imu_frame_, msg->header.stamp, rclcpp::Duration::from_seconds(0.1));
@@ -463,7 +464,7 @@ void imu_cbk(const sensor_msgs::msg::Imu::UniquePtr msg_in) {
   catch (const tf2::TransformException &ex) {
     RCLCPP_WARN(rclcpp::get_logger("fast_lio"), "Nao foi possivel obter a transformacao de '%s' para '%s': %s", _imu_frame_.c_str(), _fcu_frame_.c_str(),
                 ex.what());
-    return;
+    /* return; */
   }
 
   Eigen::Quaterniond q_FCU_IMU(T_FCU_IMU.transform.rotation.w, T_FCU_IMU.transform.rotation.x, T_FCU_IMU.transform.rotation.y, T_FCU_IMU.transform.rotation.z);
@@ -493,6 +494,9 @@ void imu_cbk(const sensor_msgs::msg::Imu::UniquePtr msg_in) {
 
   if (init) {
     fastPredictIMU(get_time_sec(msg->header.stamp), imu_accel_v3d, imu_gyro_v3d);
+  } else {
+    latest_acc_0 = imu_accel_v3d;
+    latest_gyr_0 = imu_gyro_v3d;
   }
 
   msg->header.stamp = get_ros_time(get_time_sec(msg_in->header.stamp) - time_diff_lidar_to_imu);
@@ -510,8 +514,8 @@ void imu_cbk(const sensor_msgs::msg::Imu::UniquePtr msg_in) {
   }
 
   last_timestamp_imu = timestamp;
-  last_imu_msg = *msg;
-  
+  last_imu_msg       = *msg;
+
   imu_buffer.push_back(msg);
   mtx_buffer.unlock();
   sig_buffer.notify_all();
