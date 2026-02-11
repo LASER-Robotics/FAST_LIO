@@ -161,11 +161,11 @@ void updateLatestStates() {
   }
 }
 
-void fastPredictIMU(double t, V3D acc, V3D gyr) {
+void fastPredictIMU(rclcpp::Time timestamp, V3D acc, V3D gyr) {
   if (!first_ikdtree_out_) {
     return;
   }
-
+  double t     = timestamp.seconds();
   double dt    = t - latest_time;
   latest_time  = t;
   V3D un_acc_0 = latest_Q * (latest_acc_0 - latest_Ba);
@@ -182,7 +182,7 @@ void fastPredictIMU(double t, V3D acc, V3D gyr) {
   Eigen::Quaterniond      quadrotor_Q = Eigen::Quaterniond(latest_Q);
 
   rclcpp::Clock clock;
-  odomHigh.header.stamp = clock.now();
+  odomHigh.header.stamp = timestamp;
 
   odomHigh.header.frame_id = _world_frame_;
   odomHigh.child_frame_id  = _imu_frame_;
@@ -493,7 +493,7 @@ void imu_cbk(const sensor_msgs::msg::Imu::UniquePtr msg_in) {
   pubImu_->publish(*msg);
 
   if (init) {
-    fastPredictIMU(get_time_sec(msg->header.stamp), imu_accel_v3d, imu_gyro_v3d);
+    fastPredictIMU(msg->header.stamp, imu_accel_v3d, imu_gyro_v3d);
   } else {
     latest_acc_0 = imu_accel_v3d;
     latest_gyr_0 = imu_gyro_v3d;
