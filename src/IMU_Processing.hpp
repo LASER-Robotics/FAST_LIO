@@ -7,7 +7,8 @@
 #include <csignal>
 #include <so3_math.h>
 #include <Eigen/Eigen>
-#include <common_lib.h>
+/* #include <common_lib.h> */
+#include <LI_init/LI_init.h>
 #include <pcl/common/io.h>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>

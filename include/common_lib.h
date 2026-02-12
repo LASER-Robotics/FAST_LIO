@@ -45,10 +45,10 @@ typedef Matrix3f M3F;
 #define MF(a,b)  Matrix<float, (a), (b)>
 #define VF(a)    Matrix<float, (a), 1>
 
-M3D Eye3d(M3D::Identity());
-M3F Eye3f(M3F::Identity());
-V3D Zero3d(0, 0, 0);
-V3F Zero3f(0, 0, 0);
+inline M3D Eye3d(M3D::Identity());
+inline M3F Eye3f(M3F::Identity());
+inline V3D Zero3d(0, 0, 0);
+inline V3F Zero3f(0, 0, 0);
 
 struct MeasureGroup     // Lidar data and imu dates for the curent process
 {
@@ -215,7 +215,7 @@ bool esti_normvector(Matrix<T, 3, 1> &normvec, const PointVector &point, const T
     return true;
 }
 
-float calc_dist(PointType p1, PointType p2){
+inline float calc_dist(PointType p1, PointType p2){
     float d = (p1.x - p2.x) * (p1.x - p2.x) + (p1.y - p2.y) * (p1.y - p2.y) + (p1.z - p2.z) * (p1.z - p2.z);
     return d;
 }
@@ -254,12 +254,12 @@ bool esti_plane(Matrix<T, 4, 1> &pca_result, const PointVector &point, const T &
     return true;
 }
 
-double get_time_sec(const builtin_interfaces::msg::Time &time)
+inline double get_time_sec(const builtin_interfaces::msg::Time &time)
 {
     return rclcpp::Time(time).seconds();
 }
 
-rclcpp::Time get_ros_time(double timestamp)
+inline rclcpp::Time get_ros_time(double timestamp)
 {
     int32_t sec = std::floor(timestamp);
     auto nanosec_d = (timestamp - std::floor(timestamp)) * 1e9;

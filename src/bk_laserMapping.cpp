@@ -35,22 +35,11 @@
 #include "preprocess.h"
 #include <ikd-Tree/ikd_Tree.h>
 
-#include <LI_init/LI_init.h>
 
 #define INIT_TIME (0.1)
 #define LASER_POINT_COV (0.001)
 #define MAXN (720000)
 #define PUBFRAME_PERIOD (20)
-
-// Mudancas para tentar por o LI_init
-bool                     imu_en              = false;
-bool                     data_accum_finished = false;
-bool                     data_accum_start    = false;
-int                      orig_odom_freq      = 10;
-double                   move_start_time     = 0.0;
-Eigen::MatrixXd          Jaco_rot            = Eigen::MatrixXd::Zero(30000, 3);
-std::shared_ptr<LI_Init> Init_LI             = std::make_shared<LI_Init>();
-//
 
 /*** Time Log Variables ***/
 double kdtree_incremental_time = 0.0, kdtree_search_time = 0.0, kdtree_delete_time = 0.0;
@@ -475,7 +464,7 @@ void imu_cbk(const sensor_msgs::msg::Imu::UniquePtr msg_in) {
   catch (const tf2::TransformException &ex) {
     RCLCPP_WARN(rclcpp::get_logger("fast_lio"), "Nao foi possivel obter a transformacao de '%s' para '%s': %s", _imu_frame_.c_str(), _fcu_frame_.c_str(),
                 ex.what());
-    return;
+    /* return; */
   }
 
   Eigen::Quaterniond q_FCU_IMU(T_FCU_IMU.transform.rotation.w, T_FCU_IMU.transform.rotation.x, T_FCU_IMU.transform.rotation.y, T_FCU_IMU.transform.rotation.z);
@@ -503,7 +492,7 @@ void imu_cbk(const sensor_msgs::msg::Imu::UniquePtr msg_in) {
 
   pubImu_->publish(*msg);
 
-  if (imu_en && init) {
+  if (init) {
     fastPredictIMU(get_time_sec(msg->header.stamp), imu_accel_v3d, imu_gyro_v3d);
   } else {
     latest_acc_0 = imu_accel_v3d;
@@ -521,16 +510,11 @@ void imu_cbk(const sensor_msgs::msg::Imu::UniquePtr msg_in) {
 
   if (timestamp < last_timestamp_imu) {
     std::cerr << "lidar loop back, clear buffer" << std::endl;
-    Init_LI->IMU_buffer_clear();
     imu_buffer.clear();
   }
 
   last_timestamp_imu = timestamp;
   last_imu_msg       = *msg;
-
-  auto mean_acc_norm = 9.805;
-  if (!imu_en && !data_accum_finished)
-    Init_LI->push_ALL_IMU_CalibState(msg, mean_acc_norm);
 
   imu_buffer.push_back(msg);
   mtx_buffer.unlock();
@@ -1204,8 +1188,7 @@ private:
 
       p_imu->Process(Measures, kf, feats_undistort);
       state_point = kf.get_x();
-
-      pos_lid = state_point.pos + state_point.rot * state_point.offset_T_L_I;
+      pos_lid     = state_point.pos + state_point.rot * state_point.offset_T_L_I;
 
       if (feats_undistort->empty() || (feats_undistort == NULL)) {
         RCLCPP_WARN(this->get_logger(), "No point, skip this scan!\n");
@@ -1305,65 +1288,10 @@ private:
       if (effect_pub_en)
         publish_effect_world(pubLaserCloudEffect_);
       // if (map_pub_en) publish_map(pubLaserCloudMap_);
-      
-      frame_num++;
-      
-      // Mudancas para tentar por o LI_init
-      if (!imu_en && !data_accum_finished) {
-        if (!data_accum_start && state_point.pos.norm() > 0.05) {
-          RCLCPP_INFO(this->get_logger(), "Movimento detectado! Iniciando LI-Init.");
-          data_accum_start = true;
-          move_start_time  = lidar_end_time;
-        }
-
-        if (data_accum_start) {
-          // Criamos uma variável temporária para passar como referência (int&)
-          int cut_num_tmp = 5;
-          Init_LI->push_Lidar_CalibState(state_point.rot.toRotationMatrix(), state_point.bg, state_point.vel, lidar_end_time);
-
-          data_accum_finished = Init_LI->data_sufficiency_assess(Jaco_rot, frame_num, state_point.bg, orig_odom_freq, cut_num_tmp);
-        }
-      }
-
-      if (data_accum_finished && !imu_en) {
-        // Variável temporária para o argumento cut_frame_num (int&)
-        int cut_num_tmp = 5;
-        Init_LI->LI_Initialization(orig_odom_freq, cut_num_tmp, time_diff_lidar_to_imu, move_start_time);
-
-        state_ikfom     current_state = kf.get_x();
-        Eigen::Matrix3d R_LI          = Init_LI->get_R_LI();
-        Eigen::Vector3d T_LI          = Init_LI->get_T_LI();
-        Eigen::Matrix3d rot_mat       = current_state.rot.toRotationMatrix();
-        std::cout << "R_LI: " << R_LI << std::endl;
-        std::cout << "T_LI: " << T_LI << std::endl;
-
-        current_state.offset_R_L_I = R_LI;
-        current_state.offset_T_L_I = T_LI;
-
-        // CORREÇÃO PARA O TIPO S2 (Gravidade):
-        // Não use '=', use 'set_from_vect' ou atribuição via manifold
-        /* current_state.grav = Init_LI->get_Grav_L0(); */
-
-        current_state.bg = Init_LI->get_gyro_bias();
-        current_state.ba = Init_LI->get_acc_bias();
-
-        // Reajuste de posição e rotação
-        current_state.pos = -(rot_mat * R_LI.transpose() * T_LI) + current_state.pos;
-        current_state.rot = rot_mat * R_LI.transpose();
-
-        kf.change_x(current_state);
-        imu_en = true;
-
-        // Se o seu ImuProcess não tiver esses membros, mantenha-os comentados
-        // p_imu->imu_en = true;
-        // p_imu->LI_init_done = true;
-
-        RCLCPP_INFO(this->get_logger(), "LI-Init Concluído com sucesso!");
-      }
-      //
 
       /*** Debug variables ***/
       if (runtime_pos_log) {
+        frame_num++;
         kdtree_size_end            = ikdtree.size();
         aver_time_consu            = aver_time_consu * (frame_num - 1) / frame_num + (t5 - t0) / frame_num;
         aver_time_icp              = aver_time_icp * (frame_num - 1) / frame_num + (t_update_end - t_update_start) / frame_num;
