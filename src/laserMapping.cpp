@@ -453,6 +453,12 @@ void imu_cbk(const sensor_msgs::msg::Imu::UniquePtr msg_in) {
   publish_count++;
   mtx_buffer.lock();
 
+  if (_imu_in_gravity_unit_) {
+    msg_in->linear_acceleration.x *= G_m_s2;
+    msg_in->linear_acceleration.y *= G_m_s2;
+    msg_in->linear_acceleration.z *= G_m_s2;
+  }
+
   time_msg_in = get_time_sec(msg_in->header.stamp);
 
   if (imu_cnt < 500) {
@@ -487,12 +493,6 @@ void imu_cbk(const sensor_msgs::msg::Imu::UniquePtr msg_in) {
   }
 
   sensor_msgs::msg::Imu::SharedPtr msg(new sensor_msgs::msg::Imu(*msg_in));
-
-  if (_imu_in_gravity_unit_) {
-    msg->linear_acceleration.x *= G_m_s2;
-    msg->linear_acceleration.y *= G_m_s2;
-    msg->linear_acceleration.z *= G_m_s2;
-  }
 
   Eigen::Vector3d    imu_accel(msg->linear_acceleration.x, msg->linear_acceleration.y, msg->linear_acceleration.z);
   Eigen::Vector3d    imu_gyro(msg->angular_velocity.x, msg->angular_velocity.y, msg->angular_velocity.z);
