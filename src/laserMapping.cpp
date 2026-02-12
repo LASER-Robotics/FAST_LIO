@@ -50,6 +50,7 @@ int                      orig_odom_freq      = 10;
 double                   move_start_time     = 0.0;
 Eigen::MatrixXd          Jaco_rot            = Eigen::MatrixXd::Zero(30000, 3);
 std::shared_ptr<LI_Init> Init_LI             = std::make_shared<LI_Init>();
+V3D                      mean_acc            = Zero3d;
 //
 
 /*** Time Log Variables ***/
@@ -455,6 +456,28 @@ Eigen::Quaterniond quaternion_imu_initial;
 
 void imu_cbk(const sensor_msgs::msg::Imu::UniquePtr msg_in) {
   publish_count++;
+  mtx_buffer.lock();
+
+  static double IMU_period, time_msg_in, last_time_msg_in;
+  static int    imu_cnt = 0;
+  time_msg_in           = get_time_sec(msg_in->header.stamp);
+
+  if (imu_cnt < 100) {
+    imu_cnt++;
+    mean_acc += (V3D(msg_in->linear_acceleration.x, msg_in->linear_acceleration.y, msg_in->linear_acceleration.z) - mean_acc) / (imu_cnt);
+    if (imu_cnt > 1) {
+      IMU_period += (time_msg_in - last_time_msg_in - IMU_period) / (imu_cnt - 1);
+    }
+    if (imu_cnt == 99) {
+      cout << endl << "Acceleration norm  : " << mean_acc.norm() << endl;
+      if (IMU_period > 0.01) {
+        cout << "IMU data frequency : " << 1 / IMU_period << " Hz" << endl;
+        RCLCPP_WARN(rclcpp::get_logger("fast_lio"), "IMU data frequency too low. Higher than 150 Hz is recommended.");
+      }
+      cout << endl;
+    }
+  }
+  last_time_msg_in = time_msg_in;
 
   sensor_msgs::msg::Imu::SharedPtr msg(new sensor_msgs::msg::Imu(*msg_in));
 
@@ -516,8 +539,6 @@ void imu_cbk(const sensor_msgs::msg::Imu::UniquePtr msg_in) {
   }
 
   double timestamp = get_time_sec(msg->header.stamp);
-
-  mtx_buffer.lock();
 
   if (timestamp < last_timestamp_imu) {
     std::cerr << "lidar loop back, clear buffer" << std::endl;
@@ -1305,9 +1326,10 @@ private:
       if (effect_pub_en)
         publish_effect_world(pubLaserCloudEffect_);
       // if (map_pub_en) publish_map(pubLaserCloudMap_);
-      
+
       frame_num++;
-      
+
+
       // Mudancas para tentar por o LI_init
       if (!imu_en && !data_accum_finished) {
         if (!data_accum_start && state_point.pos.norm() > 0.05) {
