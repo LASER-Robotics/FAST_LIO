@@ -8,17 +8,11 @@
 #include <fast_lio/msg/pose6_d.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <nav_msgs/msg/odometry.hpp>
-#include "color.h"
-#include "scope_timer.hpp"
-#include <rclcpp/rclcpp.hpp>
 
 using namespace std;
 using namespace Eigen;
 
 #define USE_IKFOM
-
-#define PBSTR "||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||"
-#define PBWIDTH 30
 
 #define PI_M (3.14159265358)
 #define G_m_s2 (9.81)         // Gravaty const in GuangDong/China

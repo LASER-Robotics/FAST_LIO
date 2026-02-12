@@ -63,16 +63,10 @@ find_package(pcl_conversions REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(tf2_eigen REQUIRED)
 find_package(tf2_sensor_msgs REQUIRED)
-find_package(Ceres REQUIRED)
-
-message("CERES: " ${Ceres_VERSION})
-
 
 include_directories(
   include
-  ${CERES_INCLUDE_DIRS}
 )
-
 
 set(dependencies
   rclcpp
@@ -106,14 +100,14 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 )
 ament_export_dependencies(rosidl_default_runtime)
 
-add_executable(fastlio_mapping src/laserMapping.cpp include/ikd-Tree/ikd_Tree.cpp src/preprocess.cpp include/LI_init/LI_init.cpp)
+add_executable(fastlio_mapping src/laserMapping.cpp include/ikd-Tree/ikd_Tree.cpp src/preprocess.cpp)
 target_include_directories(fastlio_mapping PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
   ${PCL_INCLUDE_DIRS}
 )
 
-target_link_libraries(fastlio_mapping ${PCL_LIBRARIES} ${PYTHON_LIBRARIES} Eigen3::Eigen ${CERES_LIBRARIES})
+target_link_libraries(fastlio_mapping ${PCL_LIBRARIES} ${PYTHON_LIBRARIES} Eigen3::Eigen)
 target_include_directories(fastlio_mapping PRIVATE ${PYTHON_INCLUDE_DIRS})
 
 list(APPEND EOL_LIST "foxy" "galactic" "eloquent" "dashing" "crystal")
