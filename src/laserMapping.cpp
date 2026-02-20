@@ -58,7 +58,9 @@ double      time_diff_lidar_to_imu = 0.0;
 mutex              mtx_buffer;
 condition_variable sig_buffer;
 
-bool            _transform_enabled_;
+bool            _transformed_enabled_;
+bool            _transformed_imu_enabled_;
+bool            _velocity_in_body_frame_;
 string          _fcu_frame_;
 string          _uav_name_;
 string          _world_frame_;
@@ -195,14 +197,16 @@ void fastPredictIMU(rclcpp::Time timestamp, V3D acc, V3D gyr) {
   odomHigh.pose.pose.orientation.z = quadrotor_Q.z();
   odomHigh.pose.pose.orientation.w = quadrotor_Q.w();
 
-  // odomHigh.twist.twist.linear.x = latest_V.x();
-  // odomHigh.twist.twist.linear.y = latest_V.y();
-  // odomHigh.twist.twist.linear.z = latest_V.z();
-
-  V3D linear_velocity_body      = latest_Q.transpose() * latest_V;
-  odomHigh.twist.twist.linear.x = linear_velocity_body.x();
-  odomHigh.twist.twist.linear.y = linear_velocity_body.y();
-  odomHigh.twist.twist.linear.z = linear_velocity_body.z();
+  if (_velocity_in_body_frame_) {
+    V3D linear_velocity_body      = latest_Q.transpose() * latest_V;
+    odomHigh.twist.twist.linear.x = linear_velocity_body.x();
+    odomHigh.twist.twist.linear.y = linear_velocity_body.y();
+    odomHigh.twist.twist.linear.z = linear_velocity_body.z();
+  } else {
+    odomHigh.twist.twist.linear.x = latest_V.x();
+    odomHigh.twist.twist.linear.y = latest_V.y();
+    odomHigh.twist.twist.linear.z = latest_V.z();
+  }
 
 
   odomHigh.twist.twist.angular.x = gyr.x() - state_point.bg.x();
@@ -356,24 +360,30 @@ void standard_pcl_cbk(const sensor_msgs::msg::PointCloud2::UniquePtr msg) {
     is_first_lidar = false;
   }
 
-  geometry_msgs::msg::TransformStamped T_FCU_IMU;
-  try {
-    T_FCU_IMU = tf_buffer_->lookupTransform(_fcu_frame_, _lidar_frame_, msg->header.stamp, rclcpp::Duration::from_seconds(0.1));
-  }
-  catch (const tf2::TransformException &ex) {
-    RCLCPP_WARN(rclcpp::get_logger("fast_lio"), "Nao foi possivel obter a transformacao de '%s' para '%s': %s", _lidar_frame_.c_str(), _fcu_frame_.c_str(),
-                ex.what());
-    mtx_buffer.unlock();  // Não esquecer de libertar o lock antes de sair
-    return;
-  }
-
-  auto transformed_ros_msg = std::make_unique<sensor_msgs::msg::PointCloud2>();
-  tf2::doTransform(*msg, *transformed_ros_msg, T_FCU_IMU);
-  transformed_ros_msg->header.stamp    = msg->header.stamp;
-  transformed_ros_msg->header.frame_id = _fcu_frame_;
-
   PointCloudXYZI::Ptr ptr(new PointCloudXYZI());
-  p_pre->process(transformed_ros_msg, ptr);
+
+  if (_transformed_enabled_) {
+    geometry_msgs::msg::TransformStamped T_FCU_IMU;
+    try {
+      T_FCU_IMU = tf_buffer_->lookupTransform(_fcu_frame_, _lidar_frame_, msg->header.stamp, rclcpp::Duration::from_seconds(0.1));
+    }
+    catch (const tf2::TransformException &ex) {
+      RCLCPP_WARN(rclcpp::get_logger("fast_lio"), "Nao foi possivel obter a transformacao de '%s' para '%s': %s", _lidar_frame_.c_str(), _fcu_frame_.c_str(),
+                  ex.what());
+      mtx_buffer.unlock();  // Não esquecer de libertar o lock antes de sair
+      return;
+    }
+
+
+    auto transformed_ros_msg = std::make_unique<sensor_msgs::msg::PointCloud2>();
+    tf2::doTransform(*msg, *transformed_ros_msg, T_FCU_IMU);
+    transformed_ros_msg->header.stamp    = msg->header.stamp;
+    transformed_ros_msg->header.frame_id = _fcu_frame_;
+    p_pre->process(transformed_ros_msg, ptr);
+  } else {
+    p_pre->process(msg, ptr);
+  }
+
   lidar_buffer.push_back(ptr);
   time_buffer.push_back(cur_time);
   last_timestamp_lidar = cur_time;
@@ -456,24 +466,32 @@ void imu_cbk(const sensor_msgs::msg::Imu::UniquePtr msg_in) {
   Eigen::Vector3d    imu_accel(msg->linear_acceleration.x, msg->linear_acceleration.y, msg->linear_acceleration.z);
   Eigen::Vector3d    imu_gyro(msg->angular_velocity.x, msg->angular_velocity.y, msg->angular_velocity.z);
   Eigen::Quaterniond imu_orientation(msg->orientation.w, msg->orientation.x, msg->orientation.y, msg->orientation.z);
+  Eigen::Quaterniond fcu_orientation;
+  Eigen::Vector3d    fcu_accel, fcu_gyro;
 
-  geometry_msgs::msg::TransformStamped T_FCU_IMU;
-  try {
-    T_FCU_IMU = tf_buffer_->lookupTransform(_fcu_frame_, _imu_frame_, msg->header.stamp, rclcpp::Duration::from_seconds(0.1));
+  if (_transformed_imu_enabled_) {
+    geometry_msgs::msg::TransformStamped T_FCU_IMU;
+    try {
+      T_FCU_IMU = tf_buffer_->lookupTransform(_fcu_frame_, _imu_frame_, msg->header.stamp, rclcpp::Duration::from_seconds(0.1));
+    }
+    catch (const tf2::TransformException &ex) {
+      RCLCPP_WARN(rclcpp::get_logger("fast_lio"), "Nao foi possivel obter a transformacao de '%s' para '%s': %s", _imu_frame_.c_str(), _fcu_frame_.c_str(),
+                  ex.what());
+      /* return; */
+    }
+    Eigen::Quaterniond q_FCU_IMU(T_FCU_IMU.transform.rotation.w, T_FCU_IMU.transform.rotation.x, T_FCU_IMU.transform.rotation.y,
+                                 T_FCU_IMU.transform.rotation.z);
+    Eigen::Vector3d    p_FCU_IMU(T_FCU_IMU.transform.translation.x, T_FCU_IMU.transform.translation.y, T_FCU_IMU.transform.translation.z);
+
+
+    fcu_gyro        = q_FCU_IMU * imu_gyro;
+    fcu_accel       = q_FCU_IMU * imu_accel;
+    fcu_orientation = imu_orientation * q_FCU_IMU.inverse();
+  } else {
+    fcu_gyro        = imu_gyro;
+    fcu_accel       = imu_accel;
+    fcu_orientation = imu_orientation;
   }
-  catch (const tf2::TransformException &ex) {
-    RCLCPP_WARN(rclcpp::get_logger("fast_lio"), "Nao foi possivel obter a transformacao de '%s' para '%s': %s", _imu_frame_.c_str(), _fcu_frame_.c_str(),
-                ex.what());
-    /* return; */
-  }
-
-  Eigen::Quaterniond q_FCU_IMU(T_FCU_IMU.transform.rotation.w, T_FCU_IMU.transform.rotation.x, T_FCU_IMU.transform.rotation.y, T_FCU_IMU.transform.rotation.z);
-  Eigen::Vector3d    p_FCU_IMU(T_FCU_IMU.transform.translation.x, T_FCU_IMU.transform.translation.y, T_FCU_IMU.transform.translation.z);
-
-
-  Eigen::Vector3d    fcu_gyro        = q_FCU_IMU * imu_gyro;
-  Eigen::Vector3d    fcu_accel       = q_FCU_IMU * imu_accel;
-  Eigen::Quaterniond fcu_orientation = imu_orientation * q_FCU_IMU.inverse();
 
   V3D                imu_gyro_v3d(fcu_gyro.x(), fcu_gyro.y(), fcu_gyro.z());
   V3D                imu_accel_v3d(fcu_accel.x(), fcu_accel.y(), fcu_accel.z());
@@ -793,11 +811,18 @@ void publish_odometry(const rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPt
   odomAftMapped.header.stamp = get_ros_time(lidar_end_time);
   set_posestamp(odomAftMapped.pose);
 
-  // Adicionando as velocidades ao twist da odometria
-  V3D linear_velocity_body            = state_point.rot.conjugate() * state_point.vel;
-  odomAftMapped.twist.twist.linear.x  = linear_velocity_body.x();
-  odomAftMapped.twist.twist.linear.y  = linear_velocity_body.y();
-  odomAftMapped.twist.twist.linear.z  = linear_velocity_body.z();
+
+  if (_velocity_in_body_frame_) {
+    V3D linear_velocity_body           = latest_Q.transpose() * latest_V;
+    odomAftMapped.twist.twist.linear.x = linear_velocity_body.x();
+    odomAftMapped.twist.twist.linear.y = linear_velocity_body.y();
+    odomAftMapped.twist.twist.linear.z = linear_velocity_body.z();
+  } else {
+    odomAftMapped.twist.twist.linear.x = latest_V.x();
+    odomAftMapped.twist.twist.linear.y = latest_V.y();
+    odomAftMapped.twist.twist.linear.z = latest_V.z();
+  }
+
   odomAftMapped.twist.twist.angular.x = latest_gyr_0.x() - state_point.bg.x();
   odomAftMapped.twist.twist.angular.y = latest_gyr_0.y() - state_point.bg.y();
   odomAftMapped.twist.twist.angular.z = latest_gyr_0.z() - state_point.bg.z();
@@ -1029,10 +1054,13 @@ public:
     this->declare_parameter<vector<double>>("mapping.extrinsic_R", vector<double>());
     this->declare_parameter<string>("uav_name", "uav1");
     this->declare_parameter<bool>("imu_in_gravity_unit", false);
+    this->declare_parameter<bool>("transform.enable", false);
+    this->declare_parameter<bool>("transform.enable_imu", false);
     this->declare_parameter<string>("transform.fcu_frame", "uav1/fl_fcu");
     this->declare_parameter<string>("transform.world_frame", "world");
     this->declare_parameter<string>("transform.lidar_frame", "lidar");
     this->declare_parameter<string>("transform.imu_frame", "imu");
+    this->declare_parameter<bool>("velocity_in_body_frame", false);
 
     tf_broadcaster_        = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
     static_tf_broadcaster_ = std::make_unique<tf2_ros::StaticTransformBroadcaster>(*this);
@@ -1075,12 +1103,14 @@ public:
 
     this->get_parameter_or<string>("uav_name", _uav_name_, "uav1");
     this->get_parameter_or<bool>("imu_in_gravity_unit", _imu_in_gravity_unit_, false);
-
+    this->get_parameter_or<bool>("transform.enable", _transformed_enabled_, false);
+    this->get_parameter_or<bool>("transform.enable_imu", _transformed_imu_enabled_, false);
     this->get_parameter_or<string>("transform.fcu_frame", _fcu_frame_, "fcu");
     this->get_parameter_or<string>("transform.world_frame", _world_frame_, "world");
     this->get_parameter_or<string>("transform.lidar_frame", _lidar_frame_, "lidar");
     this->get_parameter_or<string>("transform.imu_frame", _imu_frame_, "imu");
 
+    this->get_parameter_or<bool>("velocity_in_body_frame", _velocity_in_body_frame_, false);
 
     RCLCPP_INFO(this->get_logger(), "p_pre->lidar_type %d", p_pre->lidar_type);
 

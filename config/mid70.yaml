@@ -51,10 +51,12 @@
                 -1 # how many LiDAR frames saved in each pcd file;
                 # -1 : all frames will be saved in ONE pcd file, may lead to memory crash when having too much frames.
         
-        imu_in_gravity_unit: false # true: the IMU linear acceleration is in gravity unit (g), false: in m/s^2
-        
+        velocity_in_body_frame: true # true: the velocity is in body frame, false: in world frame
+
         transform:
-            fcu_frame: "uav1/fcu"
-            world_frame: "uav1/world"
-            lidar_frame: "uav1/livox_lidar"
-            imu_frame: "uav1/livox_imu"
+            enable: true # true: publish the TF transform between lidar_frame and world_frame, false: do not publish
+            enable_imu: false # true: publish the TF transform between lidar_frame and world_frame, false: do not publish
+            fcu_frame: "uav5/fcu"
+            world_frame: "uav5/world"
+            lidar_frame: "uav5/livox_lidar"
+            imu_frame: "uav5/livox_imu"
