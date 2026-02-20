@@ -74,6 +74,13 @@ std::unique_ptr<tf2_ros::StaticTransformBroadcaster> static_tf_broadcaster_;
 std::shared_ptr<tf2_ros::Buffer>                     tf_buffer_;
 std::shared_ptr<tf2_ros::TransformListener>          tf_listener_;
 
+// Try callib accel in init
+double IMU_period, time_msg_in, last_time_msg_in;
+int    imu_cnt          = 0;
+bool   accel_calibrated = false;
+V3D    mean_acc         = Zero3d;
+V3D    calib_hw_accel   = Zero3d;
+
 string root_dir = ROOT_DIR;
 string map_file_path;
 
@@ -454,25 +461,19 @@ Eigen::Quaterniond quaternion_imu_initial;
 
 void imu_cbk(const sensor_msgs::msg::Imu::UniquePtr msg_in) {
   publish_count++;
+  mtx_buffer.lock();
 
-  sensor_msgs::msg::Imu::SharedPtr msg(new sensor_msgs::msg::Imu(*msg_in));
 
   if (_imu_in_gravity_unit_) {
-    msg->linear_acceleration.x *= G_m_s2;
-    msg->linear_acceleration.y *= G_m_s2;
-    msg->linear_acceleration.z *= G_m_s2;
+    msg_in->linear_acceleration.x *= G_m_s2;
+    msg_in->linear_acceleration.y *= G_m_s2;
+    msg_in->linear_acceleration.z *= G_m_s2;
   }
-
-  Eigen::Vector3d    imu_accel(msg->linear_acceleration.x, msg->linear_acceleration.y, msg->linear_acceleration.z);
-  Eigen::Vector3d    imu_gyro(msg->angular_velocity.x, msg->angular_velocity.y, msg->angular_velocity.z);
-  Eigen::Quaterniond imu_orientation(msg->orientation.w, msg->orientation.x, msg->orientation.y, msg->orientation.z);
-  Eigen::Quaterniond fcu_orientation;
-  Eigen::Vector3d    fcu_accel, fcu_gyro;
 
   if (_transformed_imu_enabled_) {
     geometry_msgs::msg::TransformStamped T_FCU_IMU;
     try {
-      T_FCU_IMU = tf_buffer_->lookupTransform(_fcu_frame_, _imu_frame_, msg->header.stamp, rclcpp::Duration::from_seconds(0.1));
+      T_FCU_IMU = tf_buffer_->lookupTransform(_fcu_frame_, _imu_frame_, msg_in->header.stamp, rclcpp::Duration::from_seconds(0.1));
     }
     catch (const tf2::TransformException &ex) {
       RCLCPP_WARN(rclcpp::get_logger("fast_lio"), "Nao foi possivel obter a transformacao de '%s' para '%s': %s", _imu_frame_.c_str(), _fcu_frame_.c_str(),
@@ -484,47 +485,93 @@ void imu_cbk(const sensor_msgs::msg::Imu::UniquePtr msg_in) {
     Eigen::Vector3d    p_FCU_IMU(T_FCU_IMU.transform.translation.x, T_FCU_IMU.transform.translation.y, T_FCU_IMU.transform.translation.z);
 
 
-    fcu_gyro        = q_FCU_IMU * imu_gyro;
-    fcu_accel       = q_FCU_IMU * imu_accel;
-    fcu_orientation = imu_orientation * q_FCU_IMU.inverse();
-  } else {
-    fcu_gyro        = imu_gyro;
-    fcu_accel       = imu_accel;
-    fcu_orientation = imu_orientation;
+    Eigen::Vector3d    fcu_gyro  = q_FCU_IMU * Eigen::Vector3d(msg_in->angular_velocity.x, msg_in->angular_velocity.y, msg_in->angular_velocity.z);
+    Eigen::Vector3d    fcu_accel = q_FCU_IMU * Eigen::Vector3d(msg_in->linear_acceleration.x, msg_in->linear_acceleration.y, msg_in->linear_acceleration.z);
+    Eigen::Quaterniond fcu_orientation =
+        Eigen::Quaterniond(msg_in->orientation.w, msg_in->orientation.x, msg_in->orientation.y, msg_in->orientation.z) * q_FCU_IMU.inverse();
+
+    msg_in->linear_acceleration.x = fcu_accel(0);
+    msg_in->linear_acceleration.y = fcu_accel(1);
+    msg_in->linear_acceleration.z = fcu_accel(2);
+    msg_in->angular_velocity.x    = fcu_gyro(0);
+    msg_in->angular_velocity.y    = fcu_gyro(1);
+    msg_in->angular_velocity.z    = fcu_gyro(2);
+    msg_in->orientation.w         = fcu_orientation.w();
+    msg_in->orientation.x         = fcu_orientation.x();
+    msg_in->orientation.y         = fcu_orientation.y();
+    msg_in->orientation.z         = fcu_orientation.z();
   }
 
-  V3D                imu_gyro_v3d(fcu_gyro.x(), fcu_gyro.y(), fcu_gyro.z());
-  V3D                imu_accel_v3d(fcu_accel.x(), fcu_accel.y(), fcu_accel.z());
-  Eigen::Quaterniond quaternion_imu(fcu_orientation.w(), fcu_orientation.x(), fcu_orientation.y(), fcu_orientation.z());
+  time_msg_in = get_time_sec(msg_in->header.stamp);
 
-  msg->linear_acceleration.x = fcu_accel(0);
-  msg->linear_acceleration.y = fcu_accel(1);
-  msg->linear_acceleration.z = fcu_accel(2);
-  msg->angular_velocity.x    = fcu_gyro(0);
-  msg->angular_velocity.y    = fcu_gyro(1);
-  msg->angular_velocity.z    = fcu_gyro(2);
-  msg->orientation.w         = fcu_orientation.w();
-  msg->orientation.x         = fcu_orientation.x();
-  msg->orientation.y         = fcu_orientation.y();
-  msg->orientation.z         = fcu_orientation.z();
+  if (imu_cnt < 500) {
+    imu_cnt++;
+    mean_acc += (V3D(msg_in->linear_acceleration.x, msg_in->linear_acceleration.y, msg_in->linear_acceleration.z) - mean_acc) / (imu_cnt);
+    if (imu_cnt > 1) {
+      IMU_period += (time_msg_in - last_time_msg_in - IMU_period) / (imu_cnt - 1);
+    }
+    if (imu_cnt == 499) {
+      cout << endl << "Acceleration norm  : " << mean_acc.norm() << endl;
+      if (IMU_period > 0.01) {
+        cout << "IMU data frequency : " << 1 / IMU_period << " Hz" << endl;
+        RCLCPP_WARN(rclcpp::get_logger("fast_lio"), "IMU data frequency too low. Higher than 150 Hz is recommended.");
+      }
+      cout << endl;
 
-  pubImu_->publish(*msg);
+      calib_hw_accel   = mean_acc - V3D(0.0, 0.0, G_m_s2);
+      accel_calibrated = true;
+      RCLCPP_INFO_ONCE(rclcpp::get_logger("fast_lio"), "IMU Accel take the hardware calibration: 100.0");
+      std::cout << "Accel calibration for hardware: " << calib_hw_accel << std::endl;
+    }
+  }
+  last_time_msg_in = time_msg_in;
+
+  if (!accel_calibrated) {
+    int percent = (imu_cnt * 500) / 100;
+    if (percent == 25 || percent == 50 || percent == 75)
+      RCLCPP_INFO(rclcpp::get_logger("fast_lio"), "IMU Accel take the hardware calibration: %d", percent);
+    mtx_buffer.unlock();
+    sig_buffer.notify_all();
+    return;
+  }
+
+
+  Eigen::Vector3d    imu_accel(msg_in->linear_acceleration.x, msg_in->linear_acceleration.y, msg_in->linear_acceleration.z);
+  Eigen::Vector3d    imu_gyro(msg_in->angular_velocity.x, msg_in->angular_velocity.y, msg_in->angular_velocity.z);
+  Eigen::Quaterniond imu_orientation(msg_in->orientation.w, msg_in->orientation.x, msg_in->orientation.y, msg_in->orientation.z);
+
+  imu_accel -= calib_hw_accel;
+
+  V3D                imu_gyro_v3d(imu_gyro.x(), imu_gyro.y(), imu_gyro.z());
+  V3D                imu_accel_v3d(imu_accel.x(), imu_accel.y(), imu_accel.z());
+  Eigen::Quaterniond quaternion_imu(imu_orientation.w(), imu_orientation.x(), imu_orientation.y(), imu_orientation.z());
+
+  msg_in->linear_acceleration.x = imu_accel(0);
+  msg_in->linear_acceleration.y = imu_accel(1);
+  msg_in->linear_acceleration.z = imu_accel(2);
+  msg_in->angular_velocity.x    = imu_gyro(0);
+  msg_in->angular_velocity.y    = imu_gyro(1);
+  msg_in->angular_velocity.z    = imu_gyro(2);
+  msg_in->orientation.w         = quaternion_imu.w();
+  msg_in->orientation.x         = quaternion_imu.x();
+  msg_in->orientation.y         = quaternion_imu.y();
+  msg_in->orientation.z         = quaternion_imu.z();
+
+  pubImu_->publish(*msg_in);
 
   if (init) {
-    fastPredictIMU(msg->header.stamp, imu_accel_v3d, imu_gyro_v3d);
+    fastPredictIMU(msg_in->header.stamp, imu_accel_v3d, imu_gyro_v3d);
   } else {
     latest_acc_0 = imu_accel_v3d;
     latest_gyr_0 = imu_gyro_v3d;
   }
 
-  msg->header.stamp = get_ros_time(get_time_sec(msg_in->header.stamp) - time_diff_lidar_to_imu);
+  msg_in->header.stamp = get_ros_time(get_time_sec(msg_in->header.stamp) - time_diff_lidar_to_imu);
   if (abs(timediff_lidar_wrt_imu) > 0.1 && time_sync_en) {
-    msg->header.stamp = rclcpp::Time(timediff_lidar_wrt_imu + get_time_sec(msg_in->header.stamp));
+    msg_in->header.stamp = rclcpp::Time(timediff_lidar_wrt_imu + get_time_sec(msg_in->header.stamp));
   }
 
-  double timestamp = get_time_sec(msg->header.stamp);
-
-  mtx_buffer.lock();
+  double timestamp = get_time_sec(msg_in->header.stamp);
 
   if (timestamp < last_timestamp_imu) {
     std::cerr << "lidar loop back, clear buffer" << std::endl;
@@ -532,7 +579,9 @@ void imu_cbk(const sensor_msgs::msg::Imu::UniquePtr msg_in) {
   }
 
   last_timestamp_imu = timestamp;
-  last_imu_msg       = *msg;
+  last_imu_msg       = *msg_in;
+
+  sensor_msgs::msg::Imu::SharedPtr msg(new sensor_msgs::msg::Imu(*msg_in));
 
   imu_buffer.push_back(msg);
   mtx_buffer.unlock();
