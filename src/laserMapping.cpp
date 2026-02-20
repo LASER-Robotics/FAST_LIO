@@ -72,6 +72,13 @@ std::unique_ptr<tf2_ros::StaticTransformBroadcaster> static_tf_broadcaster_;
 std::shared_ptr<tf2_ros::Buffer>                     tf_buffer_;
 std::shared_ptr<tf2_ros::TransformListener>          tf_listener_;
 
+// Try callib accel in init
+double IMU_period, time_msg_in, last_time_msg_in;
+int    imu_cnt          = 0;
+bool   accel_calibrated = false;
+V3D    mean_acc         = Zero3d;
+V3D    calib_hw_accel   = Zero3d;
+
 string root_dir = ROOT_DIR;
 string map_file_path;
 
@@ -444,14 +451,48 @@ Eigen::Quaterniond quaternion_imu_initial;
 
 void imu_cbk(const sensor_msgs::msg::Imu::UniquePtr msg_in) {
   publish_count++;
-
-  sensor_msgs::msg::Imu::SharedPtr msg(new sensor_msgs::msg::Imu(*msg_in));
+  mtx_buffer.lock();
 
   if (_imu_in_gravity_unit_) {
-    msg->linear_acceleration.x *= G_m_s2;
-    msg->linear_acceleration.y *= G_m_s2;
-    msg->linear_acceleration.z *= G_m_s2;
+    msg_in->linear_acceleration.x *= G_m_s2;
+    msg_in->linear_acceleration.y *= G_m_s2;
+    msg_in->linear_acceleration.z *= G_m_s2;
   }
+
+  time_msg_in = get_time_sec(msg_in->header.stamp);
+
+  if (imu_cnt < 500) {
+    imu_cnt++;
+    mean_acc += (V3D(msg_in->linear_acceleration.x, msg_in->linear_acceleration.y, msg_in->linear_acceleration.z) - mean_acc) / (imu_cnt);
+    if (imu_cnt > 1) {
+      IMU_period += (time_msg_in - last_time_msg_in - IMU_period) / (imu_cnt - 1);
+    }
+    if (imu_cnt == 499) {
+      cout << endl << "Acceleration norm  : " << mean_acc.norm() << endl;
+      if (IMU_period > 0.01) {
+        cout << "IMU data frequency : " << 1 / IMU_period << " Hz" << endl;
+        RCLCPP_WARN(rclcpp::get_logger("fast_lio"), "IMU data frequency too low. Higher than 150 Hz is recommended.");
+      }
+      cout << endl;
+
+      calib_hw_accel   = mean_acc - V3D(0.0, 0.0, 9.805);
+      accel_calibrated = true;
+      RCLCPP_INFO_ONCE(rclcpp::get_logger("fast_lio"), "IMU Accel take the hardware calibration: 100.0");
+      std::cout << "Accel calibration for hardware: " << calib_hw_accel << std::endl;
+    }
+  }
+  last_time_msg_in = time_msg_in;
+
+  if (!accel_calibrated) {
+    int percent = (imu_cnt * 500) / 100;
+    if (percent == 25 || percent == 50 || percent == 75)
+      RCLCPP_INFO(rclcpp::get_logger("fast_lio"), "IMU Accel take the hardware calibration: %d", percent);
+    mtx_buffer.unlock();
+    sig_buffer.notify_all();
+    return;
+  }
+
+  sensor_msgs::msg::Imu::SharedPtr msg(new sensor_msgs::msg::Imu(*msg_in));
 
   Eigen::Vector3d    imu_accel(msg->linear_acceleration.x, msg->linear_acceleration.y, msg->linear_acceleration.z);
   Eigen::Vector3d    imu_gyro(msg->angular_velocity.x, msg->angular_velocity.y, msg->angular_velocity.z);
@@ -464,8 +505,10 @@ void imu_cbk(const sensor_msgs::msg::Imu::UniquePtr msg_in) {
   catch (const tf2::TransformException &ex) {
     RCLCPP_WARN(rclcpp::get_logger("fast_lio"), "Nao foi possivel obter a transformacao de '%s' para '%s': %s", _imu_frame_.c_str(), _fcu_frame_.c_str(),
                 ex.what());
-    /* return; */
+    return;
   }
+
+  imu_accel -= calib_hw_accel;
 
   Eigen::Quaterniond q_FCU_IMU(T_FCU_IMU.transform.rotation.w, T_FCU_IMU.transform.rotation.x, T_FCU_IMU.transform.rotation.y, T_FCU_IMU.transform.rotation.z);
   Eigen::Vector3d    p_FCU_IMU(T_FCU_IMU.transform.translation.x, T_FCU_IMU.transform.translation.y, T_FCU_IMU.transform.translation.z);
@@ -505,8 +548,6 @@ void imu_cbk(const sensor_msgs::msg::Imu::UniquePtr msg_in) {
   }
 
   double timestamp = get_time_sec(msg->header.stamp);
-
-  mtx_buffer.lock();
 
   if (timestamp < last_timestamp_imu) {
     std::cerr << "lidar loop back, clear buffer" << std::endl;
