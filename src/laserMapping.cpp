@@ -216,6 +216,17 @@ void fastPredictIMU(rclcpp::Time timestamp, V3D acc, V3D gyr) {
   odomHigh.twist.twist.angular.y = gyr.y() - state_point.bg.y();
   odomHigh.twist.twist.angular.z = gyr.z() - state_point.bg.z();
 
+  auto P = kf.get_P();
+  for (int i = 0; i < 6; i++) {
+    int k                                    = i < 3 ? i + 3 : i - 3;
+    odomHigh.pose.covariance[i * 6 + 0] = P(k, 3);
+    odomHigh.pose.covariance[i * 6 + 1] = P(k, 4);
+    odomHigh.pose.covariance[i * 6 + 2] = P(k, 5);
+    odomHigh.pose.covariance[i * 6 + 3] = P(k, 0);
+    odomHigh.pose.covariance[i * 6 + 4] = P(k, 1);
+    odomHigh.pose.covariance[i * 6 + 5] = P(k, 2);
+  }
+
   pubOdomHighFreq_->publish(odomHigh);
 }
 
