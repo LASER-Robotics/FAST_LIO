@@ -11,7 +11,7 @@
         map_file_path: "./test.pcd"
 
         common:
-            lid_topic: "/uav1/livox/points"
+            lid_topic: "/uav1/livox/fused_lidar"
             imu_topic: "/uav1/livox/imu"
             time_sync_en: false # ONLY turn on when external time synchronization is really not possible
             time_offset_lidar_to_imu:
@@ -51,13 +51,12 @@
                 -1 # how many LiDAR frames saved in each pcd file;
                 # -1 : all frames will be saved in ONE pcd file, may lead to memory crash when having too much frames.
         
-        imu_in_gravity_unit: false # true: the IMU linear acceleration is in gravity unit (g), false: in m/s^2
         velocity_in_body_frame: true # true: the velocity is in body frame, false: in world frame
 
         transform:
             enable: true # true: publish the TF transform between lidar_frame and world_frame, false: do not publish
             enable_imu: true # true: publish the TF transform between lidar_frame and world_frame, false: do not publish
-            fcu_frame: "uav5/fcu"
-            world_frame: "uav5/world"
-            lidar_frame: "uav5/livox"
-            imu_frame: "uav5/livox"
+            fcu_frame: "uav1/fcu"
+            world_frame: "uav1/world"
+            lidar_frame: "uav1/livox_45"
+            imu_frame: "uav1/livox_45"
