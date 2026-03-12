@@ -157,6 +157,8 @@ M3D    latest_Q;
 bool   init               = false;
 bool   first_ikdtree_out_ = false;
 
+Eigen::MatrixXd latest_P_cov_;
+
 void updateLatestStates() {
   latest_time = lidar_end_time;
   latest_P    = 0.5 * (state_point.pos + latest_P);
@@ -219,6 +221,17 @@ void fastPredictIMU(rclcpp::Time timestamp, V3D acc, V3D gyr) {
   odomHigh.twist.twist.angular.x = gyr.x() - state_point.bg.x();
   odomHigh.twist.twist.angular.y = gyr.y() - state_point.bg.y();
   odomHigh.twist.twist.angular.z = gyr.z() - state_point.bg.z();
+
+  for (int i = 0; i < 6; i++) {
+    // use fast-lio 10Hz covariance in fast-lio high frequency
+    int k                                    = i < 3 ? i + 3 : i - 3;
+    odomHigh.pose.covariance[i * 6 + 0] = latest_P_cov_(k, 3);
+    odomHigh.pose.covariance[i * 6 + 1] = latest_P_cov_(k, 4);
+    odomHigh.pose.covariance[i * 6 + 2] = latest_P_cov_(k, 5);
+    odomHigh.pose.covariance[i * 6 + 3] = latest_P_cov_(k, 0);
+    odomHigh.pose.covariance[i * 6 + 4] = latest_P_cov_(k, 1);
+    odomHigh.pose.covariance[i * 6 + 5] = latest_P_cov_(k, 2);
+  }
 
   pubOdomHighFreq_->publish(odomHigh);
 }
@@ -790,6 +803,8 @@ void publish_odometry(const rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPt
     odomAftMapped.pose.covariance[i * 6 + 4] = P(k, 1);
     odomAftMapped.pose.covariance[i * 6 + 5] = P(k, 2);
   }
+
+  latest_P_cov_ = kf.get_P(); // save covariance of fast-lio 10Hz
 
   pubOdomAftMapped->publish(odomAftMapped);
 
