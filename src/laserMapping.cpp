@@ -1063,7 +1063,7 @@ public:
     this->get_parameter_or<string>("uav_name", _uav_name_, "uav1");
     this->get_parameter_or<bool>("imu_in_gravity_unit", _imu_in_gravity_unit_, false);
     this->get_parameter_or<bool>("transform.enable", _transformed_enabled_, false);
-    this->get_parameter_or<bool>("transform.enable_imu", _transformed_imu_enabled_, false);
+    this->get_parameter_or<bool>("transform.enable_imu", _transformed_imu_enabled_, true);
     this->get_parameter_or<string>("transform.fcu_frame", _fcu_frame_, "fcu");
     this->get_parameter_or<string>("transform.world_frame", _world_frame_, "world");
     this->get_parameter_or<string>("transform.lidar_frame", _lidar_frame_, "lidar");
