@@ -1,199 +1,85 @@
-> ROS2 Fork repo maintainer: [Ericsiii](https://github.com/Ericsii)
+# FAST-LIO for LASER
 
-## Related Works and Extended Application
+`fast_lio` estimates vehicle motion and builds a map from LiDAR scans and IMU measurements. This LASER fork provides the ROS 2 estimator used by the LUS LiDAR-odometry integration, including scan-corrected and high-frequency odometry outputs.
 
-**SLAM:**
+FAST-LIO2 uses an iterated error-state Kalman filter and incremental mapping with ikd-Tree. It can register raw points without a separate feature-extraction stage.
 
-1. [ikd-Tree](https://github.com/hku-mars/ikd-Tree): A state-of-art dynamic KD-Tree for 3D kNN search.
-2. [R2LIVE](https://github.com/hku-mars/r2live): A high-precision LiDAR-inertial-Vision fusion work using FAST-LIO as LiDAR-inertial front-end.
-3. [LI_Init](https://github.com/hku-mars/LiDAR_IMU_Init): A robust, real-time LiDAR-IMU extrinsic initialization and synchronization package..
-4. [FAST-LIO-LOCALIZATION](https://github.com/HViktorTsoi/FAST_LIO_LOCALIZATION): The integration of FAST-LIO with **Re-localization** function module.
+## Build and run
 
-**Control and Plan:**
-
-1. [IKFOM](https://github.com/hku-mars/IKFoM): A Toolbox for fast and high-precision on-manifold Kalman filter.
-2. [UAV Avoiding Dynamic Obstacles](https://github.com/hku-mars/dyn_small_obs_avoidance): One of the implementation of FAST-LIO in robot's planning.
-3. [UGV Demo](https://www.youtube.com/watch?v=wikgrQbE6Cs): Model Predictive Control for Trajectory Tracking on Differentiable Manifolds.
-4. [Bubble Planner](https://arxiv.org/abs/2202.12177): Planning High-speed Smooth Quadrotor Trajectories using Receding Corridors.
-
-<!-- 10. [**FAST-LIVO**](https://github.com/hku-mars/FAST-LIVO): Fast and Tightly-coupled Sparse-Direct LiDAR-Inertial-Visual Odometry. -->
-
-## FAST-LIO
-**FAST-LIO** (Fast LiDAR-Inertial Odometry) is a computationally efficient and robust LiDAR-inertial odometry package. It fuses LiDAR feature points with IMU data using a tightly-coupled iterated extended Kalman filter to allow robust navigation in fast-motion, noisy or cluttered environments where degeneration occurs. Our package address many key issues:
-1. Fast iterated Kalman filter for odometry optimization;
-2. Automaticaly initialized at most steady environments;
-3. Parallel KD-Tree Search to decrease the computation;
-
-## FAST-LIO 2.0 (2021-07-05 Update)
-<!-- ![image](doc/real_experiment2.gif) -->
-<!-- [![Watch the video](doc/real_exp_2.png)](https://youtu.be/2OvjGnxszf8) -->
-<div align="left">
-<img src="doc/real_experiment2.gif" width=49.6% />
-<img src="doc/ulhkwh_fastlio.gif" width = 49.6% >
-</div>
-
-**Related video:**  [FAST-LIO2](https://youtu.be/2OvjGnxszf8),  [FAST-LIO1](https://youtu.be/iYCY6T79oNU)
-
-**Pipeline:**
-<div align="center">
-<img src="doc/overview_fastlio2.svg" width=99% />
-</div>
-
-**New Features:**
-1. Incremental mapping using [ikd-Tree](https://github.com/hku-mars/ikd-Tree), achieve faster speed and over 100Hz LiDAR rate.
-2. Direct odometry (scan to map) on Raw LiDAR points (feature extraction can be disabled), achieving better accuracy.
-3. Since no requirements for feature extraction, FAST-LIO2 can support many types of LiDAR including spinning (Velodyne, Ouster) and solid-state (Livox Avia, Horizon, MID-70) LiDARs, and can be easily extended to support more LiDARs.
-4. Support external IMU.
-5. Support ARM-based platforms including Khadas VIM3, Nivida TX2, Raspberry Pi 4B(8G RAM).
-
-**Related papers**: 
-
-[FAST-LIO2: Fast Direct LiDAR-inertial Odometry](doc/Fast_LIO_2.pdf)
-
-[FAST-LIO: A Fast, Robust LiDAR-inertial Odometry Package by Tightly-Coupled Iterated Kalman Filter](https://arxiv.org/abs/2010.08196)
-
-**Contributors**
-
-[Wei Xu 徐威](https://github.com/XW-HKU)，[Yixi Cai 蔡逸熙](https://github.com/Ecstasy-EC)，[Dongjiao He 贺东娇](https://github.com/Joanna-HE)，[Fangcheng Zhu 朱方程](https://github.com/zfc-zfc)，[Jiarong Lin 林家荣](https://github.com/ziv-lin)，[Zheng Liu 刘政](https://github.com/Zale-Liu), [Borong Yuan](https://github.com/borongyuan)
-
-<!-- <div align="center">
-    <img src="doc/results/HKU_HW.png" width = 49% >
-    <img src="doc/results/HKU_MB_001.png" width = 49% >
-</div> -->
-
-## 1. Prerequisites
-### 1.1 **Ubuntu** and **ROS**
-**Ubuntu >= 20.04**
-
-The **default from apt** PCL and Eigen is enough for FAST-LIO to work normally.
-
-ROS >= Foxy (Recommend to use ROS-Humble). [ROS Installation](https://docs.ros.org/en/humble/Installation.html)
-
-### 1.2. **PCL && Eigen**
-PCL    >= 1.8,   Follow [PCL Installation](https://pointclouds.org/downloads/#linux).
-
-Eigen  >= 3.3.4, Follow [Eigen Installation](http://eigen.tuxfamily.org/index.php?title=Main_Page).
-
-### <span id="1.3">1.3. **livox_ros_driver2**</span>
-Follow [livox_ros_driver2 Installation](https://github.com/Livox-SDK/livox_ros_driver2).
-
-You can also use the one I modified [livox_ros_driver2](https://github.com/Ericsii/livox_ros_driver2/tree/feature/use-standard-unit)
-
-*Remarks:*
-- Since the FAST-LIO must support Livox serials LiDAR firstly, so the **livox_ros_driver** must be installed and **sourced** before run any FAST-LIO launch file.
-- How to source? The easiest way is add the line ``` source $Livox_ros_driver_dir$/devel/setup.bash ``` to the end of file ``` ~/.bashrc ```, where ``` $Livox_ros_driver_dir$ ``` is the directory of the livox ros driver workspace (should be the ``` ws_livox ``` directory if you completely followed the livox official document).
-
-
-## 2. Build
-Clone the repository and colcon build:
+LUS supplies this repository through `laser_fast_lio_core`. With its dependencies available in a ROS 2 workspace:
 
 ```bash
-    cd <ros2_ws>/src # cd into a ros2 workspace folder
-    git clone https://github.com/Ericsii/FAST_LIO_ROS2.git --recursive
-    cd ..
-    rosdep install --from-paths src --ignore-src -y
-    colcon build --symlink-install
-    . ./install/setup.bash # use setup.zsh if use zsh
-```
-- **Remember to source the livox_ros_driver before build (follow [1.3 livox_ros_driver](#1.3))**
-- If you want to use a custom build of PCL, add the following line to ~/.bashrc
-```export PCL_ROOT={CUSTOM_PCL_PATH}```
-## 3. Directly run
-Noted:
-
-A. Please make sure the IMU and LiDAR are **Synchronized**, that's important.
-
-B. The warning message "Failed to find match for field 'time'." means the timestamps of each LiDAR points are missed in the rosbag file. That is important for the forward propagation and backwark propagation.
-
-C. We recommend to set the **extrinsic_est_en** to false if the extrinsic is give. As for the extrinsic initiallization, please refer to our recent work: [**Robust Real-time LiDAR-inertial Initialization**](https://github.com/hku-mars/LiDAR_IMU_Init).
-
-### 3.1 Run use ros launch
-Connect to your PC to Livox LiDAR by following  [Livox-ros-driver2 installation](https://github.com/Livox-SDK/livox_ros_driver2), then
-```bash
-cd <ros2_ws>
-. install/setup.bash # use setup.zsh if use zsh
-ros2 launch fast_lio mapping.launch.py config_file:=avia.yaml
+colcon build --packages-up-to fast_lio
+source install/setup.bash
 ```
 
-Change `config_file` parameter to other yaml file under config directory as you need.
-
-Launch livox ros driver. Use MID360 as an example.
+Use the LASER wrapper to select a calibrated sensor profile:
 
 ```bash
-ros2 launch livox_ros_driver2 msg_MID360_launch.py
+export UAV_NAME=uav1
+ros2 launch laser_fast_lio_core fast_lio.launch.py topic_pcl:=/uav1/livox/lidar topic_imu:=/uav1/livox/imu
 ```
 
-- For livox serials, FAST-LIO only support the data collected by the ``` livox_lidar_msg.launch ``` since only its ``` livox_ros_driver2/CustomMsg ``` data structure produces the timestamp of each LiDAR point which is very important for the motion undistortion. ``` livox_lidar.launch ``` can not produce it right now.
-- If you want to change the frame rate, please modify the **publish_freq** parameter in the [livox_lidar_msg.launch](https://github.com/Livox-SDK/livox_ros_driver/blob/master/livox_ros_driver2/launch/livox_lidar_msg.launch) of [Livox-ros-driver](https://github.com/Livox-SDK/livox_ros_driver2) before make the livox_ros_driver pakage.
+To start the node through this package's own launch, pass a full configuration path:
 
-### 3.2 For Livox serials with external IMU
-
-mapping_avia.launch theratically supports mid-70, mid-40 or other livox serial LiDAR, but need to setup some parameters befor run:
-
-Edit ``` config/avia.yaml ``` to set the below parameters:
-
-1. LiDAR point cloud topic name: ``` lid_topic ```
-2. IMU topic name: ``` imu_topic ```
-3. Translational extrinsic: ``` extrinsic_T ```
-4. Rotational extrinsic: ``` extrinsic_R ``` (only support rotation matrix)
-- The extrinsic parameters in FAST-LIO is defined as the LiDAR's pose (position and rotation matrix) in IMU body frame (i.e. the IMU is the base frame). They can be found in the official manual.
-- FAST-LIO produces a very simple software time sync for livox LiDAR, set parameter ```time_sync_en``` to ture to turn on. But turn on **ONLY IF external time synchronization is really not possible**, since the software time sync cannot make sure accuracy.
-
-### 3.4 PCD file save
-
-1. Enable `pcd_save.pcd_save_en` in the config file and set the `map_file_path` to the path where the map will be saved.
-2. Launch the fastlio2 according to README.
-3. Open RQt and switch to `Plugins->Services->Service Caller`. Trigger the service `/map_save`, then the pcd map file will be generated
-
-```pcl_viewer scans.pcd``` can visualize the point clouds.
-
-*Tips for pcl_viewer:*
-- change what to visualize/color by pressing keyboard 1,2,3,4,5 when pcl_viewer is running. 
-```
-    1 is all random
-    2 is X values
-    3 is Y values
-    4 is Z values
-    5 is intensity
-```
-
-## 4. Rosbag Example
-### 4.1 Livox Avia Rosbag
-<div align="left">
-<img src="doc/results/HKU_LG_Indoor.png" width=47% />
-<img src="doc/results/HKU_MB_002.png" width = 51% >
-
-Files: Can be downloaded from [google drive](https://drive.google.com/drive/folders/1CGYEJ9-wWjr8INyan6q1BZz_5VtGB-fP?usp=sharing)**!!!This ros1 bag should be convert to ros2!!!**
-
-Run:
 ```bash
-ros2 launch fast_lio mapping.launch.py config_path:=<path_to_your_config_file>
-ros2 bag play <your_bag_dir>
-
+ros2 launch fast_lio mapping.launch.py namespace:=uav1 config_file_path:=/absolute/path/to/sensor.yaml topic_pcl:=/uav1/livox/lidar topic_imu:=/uav1/livox/imu
 ```
 
-### 4.2 Velodyne HDL-32E Rosbag
+The launch uses `config_file_path`; the older upstream `config_file` and `config_path` examples do not match this fork's launch arguments. `use_sim_time` defaults to `true` when `REAL_UAV=false`.
 
-**NCLT Dataset**: Original bin file can be found [here](http://robots.engin.umich.edu/nclt/).
+## Interfaces
 
-We produce [Rosbag Files](https://drive.google.com/drive/folders/1VBK5idI1oyW0GC_I_Hxh63aqam3nocNK?usp=sharing) and [a python script](https://drive.google.com/file/d/1leh7DxbHx29DyS1NJkvEfeNJoccxH7XM/view) to generate Rosbag files: ```python3 sensordata_to_rosbag_fastlio.py bin_file_dir bag_name.bag```**!!!This ros1 bag should be convert to ros2!!!** To convert ros1 bag to ros2 bag, please follow the documentation [Convert rosbag versions](https://ternaris.gitlab.io/rosbags/topics/convert.html)
-    
-Run:
-```
-roslaunch fast_lio mapping_velodyne.launch
-rosbag play YOUR_DOWNLOADED.bag
-```
+The supplied mapping launch remaps node topics as follows for `uav1`:
 
-## 5.Implementation on UAV
-In order to validate the robustness and computational efficiency of FAST-LIO in actual mobile robots, we build a small-scale quadrotor which can carry a Livox Avia LiDAR with 70 degree FoV and a DJI Manifold 2-C onboard computer with a 1.8 GHz Intel i7-8550U CPU and 8 G RAM, as shown in below.
+| Direction | Topic | Type | Purpose |
+| --- | --- | --- | --- |
+| Input | `topic_pcl` | `sensor_msgs/msg/PointCloud2` | LiDAR scan. |
+| Input | `topic_imu` | `sensor_msgs/msg/Imu` | IMU samples. |
+| Output | `/uav1/fast_lio/odometry` | `nav_msgs/msg/Odometry` | Scan-corrected state. |
+| Output | `/uav1/fast_lio/odometry_high_freq` | `nav_msgs/msg/Odometry` | High-frequency propagated state. |
+| Output | `/uav1/fast_lio/cloud_registered` | `sensor_msgs/msg/PointCloud2` | Registered point cloud. |
+| Output | `/uav1/fast_lio/cloud_registered_body` | `sensor_msgs/msg/PointCloud2` | Cloud in the body frame. |
+| Output | `/uav1/fast_lio/cloud_effected`, `/uav1/fast_lio/laser_map` | `sensor_msgs/msg/PointCloud2` | Selected points and map output. |
+| Output | `/uav1/fast_lio/imu/out` | `sensor_msgs/msg/Imu` | Estimator IMU output. |
+| Output | `/uav1/fast_lio/path` | `nav_msgs/msg/Path` | Estimated path. |
+| Service | `/uav1/map_save` | `std_srvs/srv/Trigger` | Saves the recorded map if PCD saving is enabled. |
 
-The main structure of this UAV is 3d printed (Aluminum or PLA), the .stl file will be open-sourced in the future.
+This implementation subscribes to `PointCloud2`. The Livox `CustomMsg` subscription in the source is commented out; configure the driver or simulator to publish the point fields expected by the selected preprocessing mode.
 
-<div align="center">
-    <img src="doc/uav01.jpg" width=40.5% >
-    <img src="doc/uav_system.png" width=57% >
-</div>
+## Configuration
 
-## 6.Acknowledgments
+The sensor YAML is passed directly to the node. LUS profiles live in `laser_fast_lio_core/params/`.
 
-Thanks for LOAM(J. Zhang and S. Singh. LOAM: Lidar Odometry and Mapping in Real-time), [Livox_Mapping](https://github.com/Livox-SDK/livox_mapping), [LINS](https://github.com/ChaoqinRobotics/LINS---LiDAR-inertial-SLAM) and [Loam_Livox](https://github.com/hku-mars/loam_livox).
+| Parameter | Meaning |
+| --- | --- |
+| `preprocess.lidar_type` | `2` selects the Velodyne handler, `3` Ouster and `4` Mid-360. Other values use the generic handler in this fork. |
+| `preprocess.timestamp_unit` | Per-point time unit: `0` seconds, `1` milliseconds, `2` microseconds or `3` nanoseconds. |
+| `preprocess.scan_line`, `preprocess.scan_rate`, `preprocess.blind` | Scan structure, nominal rate and minimum range. |
+| `feature_extract_enable`, `point_filter_num` | Feature extraction and point thinning. |
+| `filter_size_surf`, `filter_size_map`, `cube_side_length`, `max_iteration` | Surface/map resolution, local map size and filter iteration limit. |
+| `common.time_sync_en`, `common.time_offset_lidar_to_imu` | Software synchronization and calibrated sensor time offset. |
+| `mapping.acc_cov`, `gyr_cov`, `b_acc_cov`, `b_gyr_cov` | IMU measurement and bias noise settings. |
+| `mapping.extrinsic_T`, `mapping.extrinsic_R` | LiDAR translation and rotation in the IMU frame. |
+| `mapping.extrinsic_est_en` | Enables online extrinsic estimation. |
+| `mapping.fov_degree`, `mapping.det_range` | Mapping field of view and range. |
+| `publish.*` | Enables path, cloud and map outputs. |
+| `pcd_save.pcd_save_en`, `pcd_save.interval`, `map_file_path` | Map recording, scan grouping and save path. |
+| `imu_in_gravity_unit` | Acceleration is in g when `true`, m/s² when `false`. |
+| `velocity_in_body_frame` | Selects the velocity output frame. |
+| `transform.enable`, `transform.enable_imu` | Enables the configured TF handling. |
+| `transform.fcu_frame`, `world_frame`, `lidar_frame`, `imu_frame` | Frame names within the `transform` group. |
+
+LiDAR and IMU timestamps must agree, and scans need usable per-point timing for motion compensation. Prefer hardware synchronization; use the software sync option only when external synchronization is unavailable. Supply measured extrinsics and the TF relationships for your sensor mounting.
+
+Enable PCD saving before calling `map_save`. An interval of `-1` retains all scans in one recording and can exhaust memory on long runs.
+
+## References and credits
+
+- [FAST-LIO2: Fast Direct LiDAR-inertial Odometry](https://doi.org/10.1109/TRO.2022.3141876).
+- [FAST-LIO: A Fast, Robust LiDAR-inertial Odometry Package by Tightly-Coupled Iterated Kalman Filter](https://arxiv.org/abs/2010.08196).
+- [FAST-LIO2 video](https://youtu.be/2OvjGnxszf8) and [FAST-LIO1 video](https://youtu.be/iYCY6T79oNU).
+
+Upstream contributors include Wei Xu, Yixi Cai, Dongjiao He, Fangcheng Zhu, Jiarong Lin, Zheng Liu and Borong Yuan. The ROS 2 fork credits [Ericsiii](https://github.com/Ericsii). FAST-LIO builds on work including LOAM, Livox Mapping, LINS, Loam Livox and [ikd-Tree](https://github.com/hku-mars/ikd-Tree).
+
+The repository retains its [GPL version 2 license](LICENSE) and bundled dependency notices.
