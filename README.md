@@ -41,6 +41,7 @@ The supplied mapping launch remaps node topics as follows for `uav1`:
 | Output | `/uav1/fast_lio/cloud_registered` | `sensor_msgs/msg/PointCloud2` | Registered point cloud. |
 | Output | `/uav1/fast_lio/cloud_registered_body` | `sensor_msgs/msg/PointCloud2` | Cloud in the body frame. |
 | Output | `/uav1/fast_lio/cloud_effected`, `/uav1/fast_lio/laser_map` | `sensor_msgs/msg/PointCloud2` | Selected points and map output. |
+| Output | `/uav1/fast_lio/num_points_effected` | `std_msgs/msg/Float64` | Number of effective points used in the EKF update. |
 | Output | `/uav1/fast_lio/imu/out` | `sensor_msgs/msg/Imu` | Estimator IMU output. |
 | Output | `/uav1/fast_lio/path` | `nav_msgs/msg/Path` | Estimated path. |
 | Service | `/uav1/map_save` | `std_srvs/srv/Trigger` | Saves the recorded map if PCD saving is enabled. |

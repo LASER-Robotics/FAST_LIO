@@ -21,6 +21,7 @@
 #include <pcl/io/pcd_io.h>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/msg/imu.hpp>
+#include <std_msgs/msg/float64.hpp>
 #include <std_srvs/srv/trigger.hpp>
 #include <tf2_ros/transform_broadcaster.h>
 #include <tf2_ros/static_transform_broadcaster.h>
@@ -1176,9 +1177,10 @@ public:
     pubLaserCloudMap_       = this->create_publisher<sensor_msgs::msg::PointCloud2>("laser_map_out", 20);
     pubOdomAftMapped_       = this->create_publisher<nav_msgs::msg::Odometry>("odometry_out", 20);
 
-    pubOdomHighFreq_ = this->create_publisher<nav_msgs::msg::Odometry>("odometry_high_freq_out", 20);
-    pubImu_          = this->create_publisher<sensor_msgs::msg::Imu>("imu_out", 20);
-    pubPath_         = this->create_publisher<nav_msgs::msg::Path>("path_out", 20);
+    pubOdomHighFreq_     = this->create_publisher<nav_msgs::msg::Odometry>("odometry_high_freq_out", 20);
+    pubImu_              = this->create_publisher<sensor_msgs::msg::Imu>("imu_out", 20);
+    pubPath_             = this->create_publisher<nav_msgs::msg::Path>("path_out", 20);
+    pubNumEffectPoints_  = this->create_publisher<std_msgs::msg::Float64>("num_points_effected_out", 20);
 
 
     //------------------------------------------------------------------------------------------------------
@@ -1306,6 +1308,10 @@ private:
       /******* Publish odometry *******/
       publish_odometry(pubOdomAftMapped_, tf_broadcaster_);
 
+      std_msgs::msg::Float64 num_effect_points_msg;
+      num_effect_points_msg.data = static_cast<double>(effct_feat_num);
+      pubNumEffectPoints_->publish(num_effect_points_msg);
+
       /*** add the feature points to map kdtree ***/
       t3 = omp_get_wtime();
       map_incremental();
@@ -1381,6 +1387,7 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr    pubLaserCloudMap_;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr          pubOdomAftMapped_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr              pubPath_;
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr           pubNumEffectPoints_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr         sub_imu_;
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_pcl_pc_;
   // AJUSTADO: Usar o tipo correto para CustomMsg do Livox

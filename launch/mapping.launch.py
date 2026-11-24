@@ -66,6 +66,7 @@ def generate_launch_description():
             ('odometry_out', 'fast_lio/odometry'),
             ('odometry_high_freq_out', 'fast_lio/odometry_high_freq'),
             ('path_out', 'fast_lio/path'),
+            ('num_points_effected_out', 'fast_lio/num_points_effected'),
         ],
         output='screen'
     )
