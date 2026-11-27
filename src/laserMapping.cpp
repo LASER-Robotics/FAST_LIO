@@ -1,4 +1,5 @@
 #include <omp.h>
+#include <atomic>
 #include <mutex>
 #include <math.h>
 #include <thread>
@@ -57,6 +58,7 @@ const float MOV_THRESHOLD          = 1.5f;
 double      time_diff_lidar_to_imu = 0.0;
 
 mutex              mtx_buffer;
+mutex              mtx_latest_state;
 condition_variable sig_buffer;
 
 bool            _transformed_enabled_;
@@ -94,7 +96,8 @@ double last_timestamp_lidar = 0, last_timestamp_imu = -1.0;
 double gyr_cov = 0.1, acc_cov = 0.1, b_gyr_cov = 0.0001, b_acc_cov = 0.0001;
 double filter_size_corner_min = 0, filter_size_surf_min = 0, filter_size_map_min = 0, fov_deg = 0;
 double cube_len = 0, HALF_FOV_COS = 0, FOV_DEG = 0, total_distance = 0, lidar_end_time = 0, first_lidar_time = 0.0;
-int    effct_feat_num = 0, time_log_counter = 0, scan_count = 0, publish_count = 0;
+int              effct_feat_num = 0, time_log_counter = 0, scan_count = 0;
+std::atomic<int> publish_count{0};
 int    iterCount = 0, feats_down_size = 0, NUM_MAX_ITERATIONS = 0, laserCloudValidNum = 0, pcd_save_interval = -1, pcd_index = 0;
 bool   point_selected_surf[100000] = {0};
 bool   lidar_pushed, flg_first_scan = true, flg_exit = false, flg_EKF_inited;
@@ -150,91 +153,129 @@ rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pubOdomHighFreq_;
 rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr   pubImu_;
 
 
-double latest_time;
-V3D    latest_Ba, latest_Bg, latest_acc_0, latest_gyr_0;
-V3D    latest_P = V3D(0.0, 0.0, 0.0);
-V3D    latest_V = V3D(0.0, 0.0, 0.0);
-M3D    latest_Q;
+double latest_time = 0.0;
+V3D    latest_Ba = Zero3d, latest_Bg = Zero3d, latest_acc_0 = Zero3d, latest_gyr_0 = Zero3d;
+V3D    latest_P    = V3D(0.0, 0.0, 0.0);
+V3D    latest_V    = V3D(0.0, 0.0, 0.0);
+V3D    latest_Grav = Zero3d;
+M3D    latest_Q    = Eye3d;
 bool   init               = false;
 bool   first_ikdtree_out_ = false;
 
 Eigen::MatrixXd latest_P_cov_;
 
 void updateLatestStates() {
-  latest_time = lidar_end_time;
-  latest_P    = 0.5 * (state_point.pos + latest_P);
-  latest_V    = 0.5 * (state_point.vel + latest_V);
-  latest_Q    = state_point.rot;
-  latest_Ba   = state_point.ba;
-  latest_Bg   = state_point.bg;
+  const V3D             pos  = state_point.pos;
+  const V3D             vel  = state_point.vel;
+  const M3D             rot  = state_point.rot.toRotationMatrix();
+  const V3D             ba   = state_point.ba;
+  const V3D             bg   = state_point.bg;
+  const V3D             grav = V3D(state_point.grav);
+  const Eigen::MatrixXd cov  = kf.get_P();
+  const double          t    = lidar_end_time;
 
+  std::lock_guard<std::mutex> lock(mtx_latest_state);
+  latest_time = t;
   if (!first_ikdtree_out_) {
+    latest_P           = pos;
+    latest_V           = vel;
     first_ikdtree_out_ = true;
+  } else {
+    latest_P = 0.5 * (pos + latest_P);
+    latest_V = 0.5 * (vel + latest_V);
   }
+  latest_Q      = rot;
+  latest_Ba     = ba;
+  latest_Bg     = bg;
+  latest_Grav   = grav;
+  latest_P_cov_ = cov;
+  init          = true;
 }
 
 void fastPredictIMU(rclcpp::Time timestamp, V3D acc, V3D gyr) {
-  if (!first_ikdtree_out_) {
-    return;
-  }
-  double t     = timestamp.seconds();
-  double dt    = t - latest_time;
-  latest_time  = t;
-  V3D un_acc_0 = latest_Q * (latest_acc_0 - latest_Ba);
-  V3D un_gyr   = 0.5 * (latest_gyr_0 + gyr - (2 * latest_Bg));
-  latest_Q     = latest_Q * Exp(un_gyr, dt);
-  V3D un_acc_1 = latest_Q * (acc - latest_Ba);
-  V3D un_acc   = 0.5 * (un_acc_0 + un_acc_1);
-  V3D un_vell  = 0.5 * (latest_V + (latest_V + (dt * (un_acc + V3D(state_point.grav)))));
-  latest_P     = latest_P + (dt * un_vell) + (0.5 * dt * dt * (un_acc + V3D(state_point.grav)));
-  latest_V     = un_vell;
-  latest_acc_0 = acc;
-  latest_gyr_0 = gyr;
   nav_msgs::msg::Odometry odomHigh;
-  Eigen::Quaterniond      quadrotor_Q = Eigen::Quaterniond(latest_Q);
+  bool                    should_publish = false;
 
-  rclcpp::Clock clock;
-  odomHigh.header.stamp = timestamp;
+  {
+    std::lock_guard<std::mutex> lock(mtx_latest_state);
+    if (!init || !first_ikdtree_out_) {
+      latest_acc_0 = acc;
+      latest_gyr_0 = gyr;
+      return;
+    }
 
-  odomHigh.header.frame_id = _world_frame_;
-  odomHigh.child_frame_id  = _imu_frame_;
+    double t  = timestamp.seconds();
+    double dt = t - latest_time;
+    if (dt <= 0.0 || dt > 0.5) {
+      if (dt > 0.5) {
+        latest_time = t;
+      }
+      latest_acc_0 = acc;
+      latest_gyr_0 = gyr;
+      return;
+    }
 
-  odomHigh.pose.pose.position.x    = latest_P.x();
-  odomHigh.pose.pose.position.y    = latest_P.y();
-  odomHigh.pose.pose.position.z    = latest_P.z();
-  odomHigh.pose.pose.orientation.x = quadrotor_Q.x();
-  odomHigh.pose.pose.orientation.y = quadrotor_Q.y();
-  odomHigh.pose.pose.orientation.z = quadrotor_Q.z();
-  odomHigh.pose.pose.orientation.w = quadrotor_Q.w();
+    latest_time  = t;
+    V3D un_acc_0 = latest_Q * (latest_acc_0 - latest_Ba);
+    V3D un_gyr   = 0.5 * (latest_gyr_0 + gyr - (2 * latest_Bg));
+    latest_Q     = latest_Q * Exp(un_gyr, dt);
+    V3D un_acc_1 = latest_Q * (acc - latest_Ba);
+    V3D un_acc   = 0.5 * (un_acc_0 + un_acc_1);
+    V3D un_vell  = 0.5 * (latest_V + (latest_V + (dt * (un_acc + latest_Grav))));
+    latest_P     = latest_P + (dt * un_vell) + (0.5 * dt * dt * (un_acc + latest_Grav));
+    latest_V     = un_vell;
+    latest_acc_0 = acc;
+    latest_gyr_0 = gyr;
 
-  if (_velocity_in_body_frame_) {
-    V3D linear_velocity_body      = latest_Q.transpose() * latest_V;
-    odomHigh.twist.twist.linear.x = linear_velocity_body.x();
-    odomHigh.twist.twist.linear.y = linear_velocity_body.y();
-    odomHigh.twist.twist.linear.z = linear_velocity_body.z();
-  } else {
-    odomHigh.twist.twist.linear.x = latest_V.x();
-    odomHigh.twist.twist.linear.y = latest_V.y();
-    odomHigh.twist.twist.linear.z = latest_V.z();
+    Eigen::Quaterniond quadrotor_Q = Eigen::Quaterniond(latest_Q);
+
+    odomHigh.header.stamp = timestamp;
+
+    odomHigh.header.frame_id = _world_frame_;
+    odomHigh.child_frame_id  = _imu_frame_;
+
+    odomHigh.pose.pose.position.x    = latest_P.x();
+    odomHigh.pose.pose.position.y    = latest_P.y();
+    odomHigh.pose.pose.position.z    = latest_P.z();
+    odomHigh.pose.pose.orientation.x = quadrotor_Q.x();
+    odomHigh.pose.pose.orientation.y = quadrotor_Q.y();
+    odomHigh.pose.pose.orientation.z = quadrotor_Q.z();
+    odomHigh.pose.pose.orientation.w = quadrotor_Q.w();
+
+    if (_velocity_in_body_frame_) {
+      V3D linear_velocity_body      = latest_Q.transpose() * latest_V;
+      odomHigh.twist.twist.linear.x = linear_velocity_body.x();
+      odomHigh.twist.twist.linear.y = linear_velocity_body.y();
+      odomHigh.twist.twist.linear.z = linear_velocity_body.z();
+    } else {
+      odomHigh.twist.twist.linear.x = latest_V.x();
+      odomHigh.twist.twist.linear.y = latest_V.y();
+      odomHigh.twist.twist.linear.z = latest_V.z();
+    }
+
+    odomHigh.twist.twist.angular.x = gyr.x() - latest_Bg.x();
+    odomHigh.twist.twist.angular.y = gyr.y() - latest_Bg.y();
+    odomHigh.twist.twist.angular.z = gyr.z() - latest_Bg.z();
+
+    if (latest_P_cov_.rows() >= 6 && latest_P_cov_.cols() >= 6) {
+      for (int i = 0; i < 6; i++) {
+        // use fast-lio 10Hz covariance in fast-lio high frequency
+        int k                               = i < 3 ? i + 3 : i - 3;
+        odomHigh.pose.covariance[i * 6 + 0] = latest_P_cov_(k, 3);
+        odomHigh.pose.covariance[i * 6 + 1] = latest_P_cov_(k, 4);
+        odomHigh.pose.covariance[i * 6 + 2] = latest_P_cov_(k, 5);
+        odomHigh.pose.covariance[i * 6 + 3] = latest_P_cov_(k, 0);
+        odomHigh.pose.covariance[i * 6 + 4] = latest_P_cov_(k, 1);
+        odomHigh.pose.covariance[i * 6 + 5] = latest_P_cov_(k, 2);
+      }
+    }
+
+    should_publish = true;
   }
 
-
-  odomHigh.twist.twist.angular.x = gyr.x() - state_point.bg.x();
-  odomHigh.twist.twist.angular.y = gyr.y() - state_point.bg.y();
-  odomHigh.twist.twist.angular.z = gyr.z() - state_point.bg.z();
-
-  for (int i = 0; i < 6; i++) {
-    // use fast-lio 10Hz covariance in fast-lio high frequency
-    int k                                    = i < 3 ? i + 3 : i - 3;
-    odomHigh.pose.covariance[i * 6 + 0] = latest_P_cov_(k, 3);
-    odomHigh.pose.covariance[i * 6 + 1] = latest_P_cov_(k, 4);
-    odomHigh.pose.covariance[i * 6 + 2] = latest_P_cov_(k, 5);
-    odomHigh.pose.covariance[i * 6 + 3] = latest_P_cov_(k, 0);
-    odomHigh.pose.covariance[i * 6 + 4] = latest_P_cov_(k, 1);
-    odomHigh.pose.covariance[i * 6 + 5] = latest_P_cov_(k, 2);
+  if (should_publish) {
+    pubOdomHighFreq_->publish(odomHigh);
   }
-
-  pubOdomHighFreq_->publish(odomHigh);
 }
 
 void SigHandle(int sig) {
@@ -367,15 +408,11 @@ void         lasermap_fov_segment() {
 }
 
 void standard_pcl_cbk(const sensor_msgs::msg::PointCloud2::UniquePtr msg) {
-  mtx_buffer.lock();
   last_pointcloud_msg = *msg;
   scan_count++;
   double cur_time              = get_time_sec(msg->header.stamp);
   double preprocess_start_time = omp_get_wtime();
-  if (!is_first_lidar && cur_time < last_timestamp_lidar) {
-    std::cerr << "lidar loop back, clear buffer" << std::endl;
-    lidar_buffer.clear();
-  }
+  bool   lidar_loop_back       = (!is_first_lidar && cur_time < last_timestamp_lidar);
   if (is_first_lidar) {
     is_first_lidar = false;
   }
@@ -390,10 +427,8 @@ void standard_pcl_cbk(const sensor_msgs::msg::PointCloud2::UniquePtr msg) {
     catch (const tf2::TransformException &ex) {
       RCLCPP_WARN(rclcpp::get_logger("fast_lio"), "Nao foi possivel obter a transformacao de '%s' para '%s': %s", _lidar_frame_.c_str(), _fcu_frame_.c_str(),
                   ex.what());
-      mtx_buffer.unlock();  // Não esquecer de libertar o lock antes de sair
       return;
     }
-
 
     auto transformed_ros_msg = std::make_unique<sensor_msgs::msg::PointCloud2>();
     tf2::doTransform(*msg, *transformed_ros_msg, T_FCU_IMU);
@@ -404,11 +439,18 @@ void standard_pcl_cbk(const sensor_msgs::msg::PointCloud2::UniquePtr msg) {
     p_pre->process(msg, ptr);
   }
 
-  lidar_buffer.push_back(ptr);
-  time_buffer.push_back(cur_time);
-  last_timestamp_lidar = cur_time;
+  {
+    std::lock_guard<std::mutex> lock(mtx_buffer);
+    if (lidar_loop_back) {
+      std::cerr << "lidar loop back, clear buffer" << std::endl;
+      lidar_buffer.clear();
+      time_buffer.clear();
+    }
+    lidar_buffer.push_back(ptr);
+    time_buffer.push_back(cur_time);
+    last_timestamp_lidar = cur_time;
+  }
   s_plot11[scan_count] = omp_get_wtime() - preprocess_start_time;
-  mtx_buffer.unlock();
   sig_buffer.notify_all();
 }
 
@@ -419,9 +461,7 @@ Eigen::Quaterniond quaternion_imu_initial;
 void imu_cbk(const sensor_msgs::msg::Imu::UniquePtr msg_in) {
   publish_count++;
 
-  mtx_buffer.lock();
   sensor_msgs::msg::Imu::SharedPtr msg(new sensor_msgs::msg::Imu(*msg_in));
-  mtx_buffer.unlock();
 
   if (_imu_in_gravity_unit_) {
     msg->linear_acceleration.x *= G_m_s2;
@@ -431,25 +471,28 @@ void imu_cbk(const sensor_msgs::msg::Imu::UniquePtr msg_in) {
 
   if (_transformed_imu_enabled_) {
     geometry_msgs::msg::TransformStamped T_FCU_IMU;
+    bool                                 tf_ok = false;
     try {
-      T_FCU_IMU = tf_buffer_->lookupTransform(_fcu_frame_, _imu_frame_, msg->header.stamp, rclcpp::Duration::from_seconds(0.1));
+      T_FCU_IMU = tf_buffer_->lookupTransform(_fcu_frame_, _imu_frame_, msg->header.stamp);
+      tf_ok     = true;
     }
-    catch (const tf2::TransformException &ex) {
-      RCLCPP_WARN(rclcpp::get_logger("fast_lio"), "Nao foi possivel obter a transformacao de '%s' para '%s': %s", _imu_frame_.c_str(), _fcu_frame_.c_str(),
-                  ex.what());
-      /* return; */
+    catch (const tf2::TransformException &) {
+      try {
+        T_FCU_IMU = tf_buffer_->lookupTransform(_fcu_frame_, _imu_frame_, tf2::TimePointZero);
+        tf_ok     = true;
+      }
+      catch (const tf2::TransformException &ex) {
+        RCLCPP_WARN(rclcpp::get_logger("fast_lio"), "Nao foi possivel obter a transformacao de '%s' para '%s': %s", _imu_frame_.c_str(), _fcu_frame_.c_str(),
+                    ex.what());
+      }
     }
 
-    tf2::Quaternion q;
-    tf2::fromMsg(T_FCU_IMU.transform.rotation, q);
-
-    double roll, pitch, yaw;
-    tf2::Matrix3x3(q).getRPY(roll, pitch, yaw);  // radianos
+    if (!tf_ok) {
+      return;
+    }
 
     Eigen::Quaterniond q_FCU_IMU(T_FCU_IMU.transform.rotation.w, T_FCU_IMU.transform.rotation.x, T_FCU_IMU.transform.rotation.y,
                                  T_FCU_IMU.transform.rotation.z);
-    Eigen::Vector3d    p_FCU_IMU(T_FCU_IMU.transform.translation.x, T_FCU_IMU.transform.translation.y, T_FCU_IMU.transform.translation.z);
-
 
     Eigen::Vector3d    fcu_gyro  = q_FCU_IMU * Eigen::Vector3d(msg->angular_velocity.x, msg->angular_velocity.y, msg->angular_velocity.z);
     Eigen::Vector3d    fcu_accel = q_FCU_IMU * Eigen::Vector3d(msg->linear_acceleration.x, msg->linear_acceleration.y, msg->linear_acceleration.z);
@@ -496,11 +539,9 @@ void imu_cbk(const sensor_msgs::msg::Imu::UniquePtr msg_in) {
     int percent = (imu_cnt * 500) / 100;
     if (percent == 25 || percent == 50 || percent == 75)
       RCLCPP_INFO(rclcpp::get_logger("fast_lio"), "IMU Accel take the hardware calibration: %d", percent);
-    mtx_buffer.unlock();
     sig_buffer.notify_all();
     return;
   }
-
 
   Eigen::Vector3d    imu_accel(msg->linear_acceleration.x, msg->linear_acceleration.y, msg->linear_acceleration.z);
   Eigen::Vector3d    imu_gyro(msg->angular_velocity.x, msg->angular_velocity.y, msg->angular_velocity.z);
@@ -525,76 +566,73 @@ void imu_cbk(const sensor_msgs::msg::Imu::UniquePtr msg_in) {
 
   pubImu_->publish(*msg);
 
-  if (init) {
-    fastPredictIMU(msg->header.stamp, imu_accel_v3d, imu_gyro_v3d);
-  } else {
-    latest_acc_0 = imu_accel_v3d;
-    latest_gyr_0 = imu_gyro_v3d;
-  }
+  fastPredictIMU(msg->header.stamp, imu_accel_v3d, imu_gyro_v3d);
 
   msg->header.stamp = get_ros_time(get_time_sec(msg->header.stamp) - time_diff_lidar_to_imu);
   double timestamp  = get_time_sec(msg->header.stamp);
 
-  if (timestamp < last_timestamp_imu) {
-    std::cerr << "lidar loop back, clear buffer" << std::endl;
-    imu_buffer.clear();
+  {
+    std::lock_guard<std::mutex> lock(mtx_buffer);
+    if (timestamp < last_timestamp_imu) {
+      std::cerr << "lidar loop back, clear buffer" << std::endl;
+      imu_buffer.clear();
+    }
+
+    last_timestamp_imu = timestamp;
+    last_imu_msg       = *msg;
+    imu_buffer.push_back(msg);
   }
-
-  last_timestamp_imu = timestamp;
-  last_imu_msg       = *msg;
-
-
-  imu_buffer.push_back(msg);
   sig_buffer.notify_all();
 }
 
 double lidar_mean_scantime = 0.0;
 int    scan_num            = 0;
 bool   sync_packages(MeasureGroup &meas) {
-    if (lidar_buffer.empty() || imu_buffer.empty()) {
-      return false;
+  std::lock_guard<std::mutex> lock(mtx_buffer);
+  if (lidar_buffer.empty() || imu_buffer.empty()) {
+    return false;
   }
 
-    /*** push a lidar scan ***/
-    if (!lidar_pushed) {
-      meas.lidar          = lidar_buffer.front();
-      meas.lidar_beg_time = time_buffer.front();
-      if (meas.lidar->points.size() <= 1)  // time too little
-      {
-        lidar_end_time = meas.lidar_beg_time + lidar_mean_scantime;
-        std::cerr << "Too few input point cloud!\n";
+  /*** push a lidar scan ***/
+  if (!lidar_pushed) {
+    meas.lidar          = lidar_buffer.front();
+    meas.lidar_beg_time = time_buffer.front();
+    if (meas.lidar->points.size() <= 1)  // time too little
+    {
+      lidar_end_time = meas.lidar_beg_time + lidar_mean_scantime;
+      std::cerr << "Too few input point cloud!\n";
     } else if (meas.lidar->points.back().curvature / double(1000) < 0.5 * lidar_mean_scantime) {
-        lidar_end_time = meas.lidar_beg_time + lidar_mean_scantime;
+      lidar_end_time = meas.lidar_beg_time + lidar_mean_scantime;
     } else {
-        scan_num++;
-        lidar_end_time = meas.lidar_beg_time + meas.lidar->points.back().curvature / double(1000);
-        lidar_mean_scantime += (meas.lidar->points.back().curvature / double(1000) - lidar_mean_scantime) / scan_num;
+      scan_num++;
+      lidar_end_time = meas.lidar_beg_time + meas.lidar->points.back().curvature / double(1000);
+      lidar_mean_scantime += (meas.lidar->points.back().curvature / double(1000) - lidar_mean_scantime) / scan_num;
     }
 
-      meas.lidar_end_time = lidar_end_time;
+    meas.lidar_end_time = lidar_end_time;
 
-      lidar_pushed = true;
+    lidar_pushed = true;
   }
 
-    if (last_timestamp_imu < lidar_end_time) {
-      return false;
+  if (last_timestamp_imu < lidar_end_time) {
+    return false;
   }
 
-    /*** push imu data, and pop from imu buffer ***/
-    double imu_time = get_time_sec(imu_buffer.front()->header.stamp);
-    meas.imu.clear();
-    while ((!imu_buffer.empty()) && (imu_time < lidar_end_time)) {
-      imu_time = get_time_sec(imu_buffer.front()->header.stamp);
-      if (imu_time > lidar_end_time)
+  /*** push imu data, and pop from imu buffer ***/
+  double imu_time = get_time_sec(imu_buffer.front()->header.stamp);
+  meas.imu.clear();
+  while ((!imu_buffer.empty()) && (imu_time < lidar_end_time)) {
+    imu_time = get_time_sec(imu_buffer.front()->header.stamp);
+    if (imu_time > lidar_end_time)
       break;
     meas.imu.push_back(imu_buffer.front());
-      imu_buffer.pop_front();
+    imu_buffer.pop_front();
   }
 
-    lidar_buffer.pop_front();
-    time_buffer.pop_front();
-    lidar_pushed = false;
-    return true;
+  lidar_buffer.pop_front();
+  time_buffer.pop_front();
+  lidar_pushed = false;
+  return true;
 }
 
 int  process_increments = 0;
@@ -808,20 +846,30 @@ void publish_odometry(const rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPt
   set_posestamp(odomAftMapped.pose);
 
 
+  M3D local_Q;
+  V3D local_V;
+  V3D local_gyr_0;
+  {
+    std::lock_guard<std::mutex> lock(mtx_latest_state);
+    local_Q     = latest_Q;
+    local_V     = latest_V;
+    local_gyr_0 = latest_gyr_0;
+  }
+
   if (_velocity_in_body_frame_) {
-    V3D linear_velocity_body           = latest_Q.transpose() * latest_V;
+    V3D linear_velocity_body           = local_Q.transpose() * local_V;
     odomAftMapped.twist.twist.linear.x = linear_velocity_body.x();
     odomAftMapped.twist.twist.linear.y = linear_velocity_body.y();
     odomAftMapped.twist.twist.linear.z = linear_velocity_body.z();
   } else {
-    odomAftMapped.twist.twist.linear.x = latest_V.x();
-    odomAftMapped.twist.twist.linear.y = latest_V.y();
-    odomAftMapped.twist.twist.linear.z = latest_V.z();
+    odomAftMapped.twist.twist.linear.x = local_V.x();
+    odomAftMapped.twist.twist.linear.y = local_V.y();
+    odomAftMapped.twist.twist.linear.z = local_V.z();
   }
 
-  odomAftMapped.twist.twist.angular.x = latest_gyr_0.x() - state_point.bg.x();
-  odomAftMapped.twist.twist.angular.y = latest_gyr_0.y() - state_point.bg.y();
-  odomAftMapped.twist.twist.angular.z = latest_gyr_0.z() - state_point.bg.z();
+  odomAftMapped.twist.twist.angular.x = local_gyr_0.x() - state_point.bg.x();
+  odomAftMapped.twist.twist.angular.y = local_gyr_0.y() - state_point.bg.y();
+  odomAftMapped.twist.twist.angular.z = local_gyr_0.z() - state_point.bg.z();
 
   auto P = kf.get_P();
   for (int i = 0; i < 6; i++) {
@@ -833,8 +881,6 @@ void publish_odometry(const rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPt
     odomAftMapped.pose.covariance[i * 6 + 4] = P(k, 1);
     odomAftMapped.pose.covariance[i * 6 + 5] = P(k, 2);
   }
-
-  latest_P_cov_ = kf.get_P(); // save covariance of fast-lio 10Hz
 
   pubOdomAftMapped->publish(odomAftMapped);
 
@@ -1164,13 +1210,11 @@ public:
     else
       cout << "~~~~" << ROOT_DIR << " doesn't exist" << endl;
 
-    /*** ROS subscribe initialization ***/
-    // if (p_pre->lidar_type == AVIA) {
-    //   sub_pcl_livox_ = this->create_subscription<livox_ros_driver2::msg::CustomMsg>("lidar_in", 20, livox_pcl_cbk);
-    // } else {
-    sub_pcl_pc_ = this->create_subscription<sensor_msgs::msg::PointCloud2>("lidar_in", rclcpp::SensorDataQoS(), standard_pcl_cbk);
-    // }
-    sub_imu_                = this->create_subscription<sensor_msgs::msg::Imu>("imu_in", 10, imu_cbk);
+    /*** Callback groups for decoupled high-freq IMU and 10 Hz LiDAR mapping ***/
+    imu_cb_group_     = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    mapping_cb_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+
+    /*** ROS publish & subscribe initialization ***/
     pubLaserCloudFull_      = this->create_publisher<sensor_msgs::msg::PointCloud2>("cloud_registered_out", 20);
     pubLaserCloudFull_body_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("cloud_registered_body_out", 20);
     pubLaserCloudEffect_    = this->create_publisher<sensor_msgs::msg::PointCloud2>("cloud_effected_out", 20);
@@ -1182,16 +1226,28 @@ public:
     pubPath_             = this->create_publisher<nav_msgs::msg::Path>("path_out", 20);
     pubNumEffectPoints_  = this->create_publisher<std_msgs::msg::Float64>("num_points_effected_out", 20);
 
+    rclcpp::SubscriptionOptions pcl_sub_options;
+    pcl_sub_options.callback_group = mapping_cb_group_;
+    // if (p_pre->lidar_type == AVIA) {
+    //   sub_pcl_livox_ = this->create_subscription<livox_ros_driver2::msg::CustomMsg>("lidar_in", 20, livox_pcl_cbk, pcl_sub_options);
+    // } else {
+    sub_pcl_pc_ = this->create_subscription<sensor_msgs::msg::PointCloud2>("lidar_in", rclcpp::SensorDataQoS(), standard_pcl_cbk, pcl_sub_options);
+    // }
+
+    rclcpp::SubscriptionOptions imu_sub_options;
+    imu_sub_options.callback_group = imu_cb_group_;
+    sub_imu_                       = this->create_subscription<sensor_msgs::msg::Imu>("imu_in", 10, imu_cbk, imu_sub_options);
 
     //------------------------------------------------------------------------------------------------------
     auto period_ms = std::chrono::milliseconds(static_cast<int64_t>(1000.0 / 100.0));
-    timer_         = rclcpp::create_timer(this, this->get_clock(), period_ms, std::bind(&LaserMappingNode::timer_callback, this));
+    timer_         = rclcpp::create_timer(this, this->get_clock(), period_ms, std::bind(&LaserMappingNode::timer_callback, this), mapping_cb_group_);
 
     auto map_period_ms = std::chrono::milliseconds(static_cast<int64_t>(1000.0));
-    map_pub_timer_     = rclcpp::create_timer(this, this->get_clock(), map_period_ms, std::bind(&LaserMappingNode::map_publish_callback, this));
+    map_pub_timer_     = rclcpp::create_timer(this, this->get_clock(), map_period_ms, std::bind(&LaserMappingNode::map_publish_callback, this), mapping_cb_group_);
 
     map_save_srv_ = this->create_service<std_srvs::srv::Trigger>(
-        "map_save", std::bind(&LaserMappingNode::map_save_callback, this, std::placeholders::_1, std::placeholders::_2));
+        "map_save", std::bind(&LaserMappingNode::map_save_callback, this, std::placeholders::_1, std::placeholders::_2),
+        rmw_qos_profile_services_default, mapping_cb_group_);
 
     RCLCPP_INFO(this->get_logger(), "Node init finished.");
   }
@@ -1302,7 +1358,6 @@ private:
 
       double t_update_end = omp_get_wtime();
 
-      init = true;
       updateLatestStates();
 
       /******* Publish odometry *******/
@@ -1394,6 +1449,8 @@ private:
   // rclcpp::Subscription<livox_ros_driver2::msg::CustomMsg>::SharedPtr sub_pcl_livox_;
 
 
+  rclcpp::CallbackGroup::SharedPtr                   imu_cb_group_;
+  rclcpp::CallbackGroup::SharedPtr                   mapping_cb_group_;
   rclcpp::TimerBase::SharedPtr                       timer_;
   rclcpp::TimerBase::SharedPtr                       map_pub_timer_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr map_save_srv_;
@@ -1413,7 +1470,10 @@ int main(int argc, char **argv) {
 
   signal(SIGINT, SigHandle);
 
-  rclcpp::spin(std::make_shared<LaserMappingNode>());
+  auto node = std::make_shared<LaserMappingNode>();
+  rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(), 3);
+  executor.add_node(node);
+  executor.spin();
 
   if (rclcpp::ok())
     rclcpp::shutdown();
