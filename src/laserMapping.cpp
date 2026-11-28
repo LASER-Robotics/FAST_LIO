@@ -153,16 +153,39 @@ rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pubOdomHighFreq_;
 rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr   pubImu_;
 
 
-double latest_time = 0.0;
-V3D    latest_Ba = Zero3d, latest_Bg = Zero3d, latest_acc_0 = Zero3d, latest_gyr_0 = Zero3d;
-V3D    latest_P    = V3D(0.0, 0.0, 0.0);
-V3D    latest_V    = V3D(0.0, 0.0, 0.0);
-V3D    latest_Grav = Zero3d;
-M3D    latest_Q    = Eye3d;
-bool   init               = false;
-bool   first_ikdtree_out_ = false;
+struct PropImuSample {
+  double t;
+  V3D    acc;
+  V3D    gyr;
+};
+
+double                    latest_time = 0.0;
+V3D                       latest_Ba = Zero3d, latest_Bg = Zero3d, latest_acc_0 = Zero3d, latest_gyr_0 = Zero3d;
+V3D                       latest_P    = V3D(0.0, 0.0, 0.0);
+V3D                       latest_V    = V3D(0.0, 0.0, 0.0);
+V3D                       latest_Grav = Zero3d;
+M3D                       latest_Q    = Eye3d;
+bool                      init               = false;
+bool                      first_ikdtree_out_ = false;
+std::deque<PropImuSample> prop_imu_buf_;
 
 Eigen::MatrixXd latest_P_cov_;
+
+inline void propagateImuStep(
+    double dt, const V3D &acc0, const V3D &gyr0, const V3D &acc1, const V3D &gyr1,
+    const V3D &ba, const V3D &bg, const V3D &grav,
+    V3D &P, V3D &V, M3D &Q) {
+  if (dt <= 0.0 || dt > 0.1) {
+    return;
+  }
+  const V3D un_gyr   = 0.5 * (gyr0 + gyr1) - bg;
+  const V3D un_acc_0 = Q * (acc0 - ba) + grav;
+  Q                  = Q * Exp(un_gyr, dt);
+  const V3D un_acc_1 = Q * (acc1 - ba) + grav;
+  const V3D un_acc   = 0.5 * (un_acc_0 + un_acc_1);
+  P                  = P + V * dt + 0.5 * un_acc * dt * dt;
+  V                  = V + un_acc * dt;
+}
 
 void updateLatestStates() {
   const V3D             pos  = state_point.pos;
@@ -175,37 +198,67 @@ void updateLatestStates() {
   const double          t    = lidar_end_time;
 
   std::lock_guard<std::mutex> lock(mtx_latest_state);
-  latest_time = t;
-  if (!first_ikdtree_out_) {
-    latest_P           = pos;
-    latest_V           = vel;
-    first_ikdtree_out_ = true;
-  } else {
-    latest_P = 0.5 * (pos + latest_P);
-    latest_V = 0.5 * (vel + latest_V);
+  while (prop_imu_buf_.size() > 1 && prop_imu_buf_[1].t <= t) {
+    prop_imu_buf_.pop_front();
   }
-  latest_Q      = rot;
-  latest_Ba     = ba;
-  latest_Bg     = bg;
-  latest_Grav   = grav;
-  latest_P_cov_ = cov;
-  init          = true;
+
+  V3D    P_prop = pos;
+  V3D    V_prop = vel;
+  M3D    Q_prop = rot;
+  double t_prop = t;
+
+  if (!prop_imu_buf_.empty()) {
+    V3D acc_prev = prop_imu_buf_.front().acc;
+    V3D gyr_prev = prop_imu_buf_.front().gyr;
+    for (const auto &s : prop_imu_buf_) {
+      if (s.t <= t_prop) {
+        acc_prev = s.acc;
+        gyr_prev = s.gyr;
+        continue;
+      }
+      propagateImuStep(s.t - t_prop, acc_prev, gyr_prev, s.acc, s.gyr, ba, bg, grav, P_prop, V_prop, Q_prop);
+      t_prop   = s.t;
+      acc_prev = s.acc;
+      gyr_prev = s.gyr;
+    }
+    latest_acc_0 = acc_prev;
+    latest_gyr_0 = gyr_prev;
+  }
+
+  first_ikdtree_out_ = true;
+  latest_time        = t_prop;
+  latest_P           = P_prop;
+  latest_V           = V_prop;
+  latest_Q           = Q_prop;
+  latest_Ba          = ba;
+  latest_Bg          = bg;
+  latest_Grav        = grav;
+  latest_P_cov_      = cov;
+  init               = true;
 }
 
 void fastPredictIMU(rclcpp::Time timestamp, V3D acc, V3D gyr) {
   nav_msgs::msg::Odometry odomHigh;
   bool                    should_publish = false;
+  const double            t              = get_time_sec(timestamp) - time_diff_lidar_to_imu;
 
   {
     std::lock_guard<std::mutex> lock(mtx_latest_state);
+    if (!prop_imu_buf_.empty() && t < prop_imu_buf_.back().t) {
+      prop_imu_buf_.clear();
+    }
+    prop_imu_buf_.push_back({t, acc, gyr});
+    while (prop_imu_buf_.size() > 600) {
+      prop_imu_buf_.pop_front();
+    }
+
     if (!init || !first_ikdtree_out_) {
       latest_acc_0 = acc;
       latest_gyr_0 = gyr;
       return;
     }
 
-    double t  = timestamp.seconds();
-    double dt = t - latest_time;
+    const double dt = t - latest_time;
     if (dt <= 0.0 || dt > 0.5) {
       if (dt > 0.5) {
         latest_time = t;
@@ -215,15 +268,8 @@ void fastPredictIMU(rclcpp::Time timestamp, V3D acc, V3D gyr) {
       return;
     }
 
+    propagateImuStep(dt, latest_acc_0, latest_gyr_0, acc, gyr, latest_Ba, latest_Bg, latest_Grav, latest_P, latest_V, latest_Q);
     latest_time  = t;
-    V3D un_acc_0 = latest_Q * (latest_acc_0 - latest_Ba);
-    V3D un_gyr   = 0.5 * (latest_gyr_0 + gyr - (2 * latest_Bg));
-    latest_Q     = latest_Q * Exp(un_gyr, dt);
-    V3D un_acc_1 = latest_Q * (acc - latest_Ba);
-    V3D un_acc   = 0.5 * (un_acc_0 + un_acc_1);
-    V3D un_vell  = 0.5 * (latest_V + (latest_V + (dt * (un_acc + latest_Grav))));
-    latest_P     = latest_P + (dt * un_vell) + (0.5 * dt * dt * (un_acc + latest_Grav));
-    latest_V     = un_vell;
     latest_acc_0 = acc;
     latest_gyr_0 = gyr;
 
